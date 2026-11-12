@@ -39,12 +39,12 @@ image = (
     .run_commands(
         "python -c \"import solcx; [solcx.install_solc(v) for v in ('0.8.20','0.8.24','0.8.26')]\"",
     )
-    .add_local_dir(REPO / "src", "/app/src", copy=True)
-    .add_local_dir(REPO / "public", "/app/public", copy=True)
-    .add_local_file(REPO / "pyproject.toml", "/app/pyproject.toml")
+    # No copy=True: files are mounted fresh at container start, so every
+    # deploy serves the latest source and public/ without image rebuilds.
+    .add_local_dir(REPO / "src", "/app/src")
+    .add_local_dir(REPO / "public", "/app/public")
     .workdir("/app")
     .env({"PYTHONPATH": "/app/src"})
-    .run_commands("python -c \"import preflight.api.app as a; print('image import ok:', a.app.title)\"")
 )
 
 app = modal.App("preflight-api", image=image)
@@ -55,8 +55,9 @@ app = modal.App("preflight-api", image=image)
     min_containers=1,  # always-on: agents must find us on the first request
     timeout=300,
 )
-@modal.web_server(8000, requires_proxy_auth=False)
-def run_api() -> None:
-    import uvicorn
+@modal.asgi_app()
+def api():
+    """Modal serves the FastAPI ASGI app directly — no uvicorn, no port binding."""
+    from preflight.api.app import app
 
-    uvicorn.run("preflight.api.app:app", host="0.0.0.0", port=8000, log_level="info")
+    return app

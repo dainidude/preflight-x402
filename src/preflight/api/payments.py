@@ -268,6 +268,15 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     try:
         settled = await server.settle_payment(payload, requirements[0])
+        if not settled.success:
+            # Facilitator settles fail intermittently (hiccups, pending windows).
+            # Retrying is safe: EIP-3009 authorizations are single-use, so a
+            # broadcast that actually landed cannot be replayed — this retry
+            # only rescues settles that never broadcast.
+            import asyncio as _asyncio
+
+            await _asyncio.sleep(2.0)
+            settled = await server.settle_payment(payload, requirements[0])
         response.headers[PAYMENT_RESPONSE_HEADER] = safe_base64_encode(
             settled.model_dump_json()
         )

@@ -46,17 +46,25 @@ Full testnet demo: `./scripts/run_demo.sh testnet` · offline suite: `./scripts/
 
 ## 4. Go public (directory listing)
 
-With the tunnel URL live (say `https://xyz.trycloudflare.com`):
+With a **permanent** URL live (x402scan rejects ephemeral tunnel URLs):
 
-1. Verify from outside: `curl -i https://xyz.trycloudflare.com/v1/scan -d '{"source":"contract A{}"}' -H 'Content-Type: application/json'` → must be `402` with `PAYMENT-REQUIRED`.
-2. Submit to the directories (they crawl `/.well-known/x402.json` / Bazaar):
-   - **Bazaar** (facilitator discovery) — per `docs.x402.org/extensions/bazaar`
-   - **x402scan.com**, **agentic.market**, **pay.sh**, **x402-list.com**
+1. Verify from outside: `curl -i <PERMANENT_URL>/v1/scan -d '{"source":"contract A{}"}' -H 'Content-Type: application/json'` → must be `402` with `PAYMENT-REQUIRED`.
+2. Submit to the directories:
+   - **x402scan.com/resources/register** — paste the permanent URL (30 s)
+   - **Bazaar** — server extension already registered (`x402.extensions.bazaar`); CDP indexes by `payTo`
+   - **agentic.market**, **pay.sh**, **x402-list.com**
+   - **awesome-agentic-commerce** — PR #883 open
 3. Post the `llms.txt` + MCP server (`uv run python -m preflight.mcp.server`) to agent-dev Discords/communities.
 
-Quick-tunnel URLs are **ephemeral** (die with the process). For a durable launch pick one:
-- **Cloudflare named tunnel**: `cloudflared tunnel login` once, `cloudflared tunnel create preflight`, route your own hostname — then the same `--url` flag. Free.
-- **Fly.io/Modal deploy** (the plan's original stack): container with `uvicorn preflight.api.app:app`, env vars as above, then a named tunnel or direct hostname.
+Quick-tunnel URLs are **ephemeral** (die with the process). Permanent options:
+
+- **Modal (recommended, in use)**: `set -a && source .env && set +a && modal deploy deploy/modal_app.py`
+  → permanent `https://<workspace>--preflight-api--8000.modal.run`, always-on via `min_containers=1`,
+  solc pre-baked in the image, secrets injected from local env. ~$5-10/mo within the $30 free credits.
+- **Cloudflare named tunnel**: requires a **domain added to your Cloudflare account** (`cloudflared
+  tunnel login` shows zones to pick — if the picker is empty, your account has no domains yet).
+  Free once you own a zone.
+- **Fly.io/Modal alternatives**: container with `uvicorn preflight.api.app:app`, env vars as above.
 
 ## 5. Mainnet flip (when ready to earn real USDC)
 

@@ -131,25 +131,25 @@ transfer. `source` is optional Solidity source for static honeypot detectors.
 
 ```bash
 # Service info + prices
-curl http://127.0.0.1:8000/
+curl https://dainius-raulinaitis--preflight-api-api.us-east.modal.run/
 
 # Revenue/usage metrics (free)
-curl http://127.0.0.1:8000/metrics
+curl https://dainius-raulinaitis--preflight-api-api.us-east.modal.run/metrics
 
 # Dev-mode scan (no payment; server must run DEV_MODE=1)
-curl -X POST http://127.0.0.1:8000/v1/scan \
+curl -X POST https://dainius-raulinaitis--preflight-api-api.us-east.modal.run/v1/scan \
   -H 'Content-Type: application/json' \
   -d '{"source":"contract Bad {}","contract_name":"Bad"}'
 
 # Paid loop, step 1: request -> 402 with PAYMENT-REQUIRED
-curl -i -X POST http://127.0.0.1:8000/v1/scan \
+curl -i -X POST https://dainius-raulinaitis--preflight-api-api.us-east.modal.run/v1/scan \
   -H 'Content-Type: application/json' \
   -d '{"source":"contract Bad {}"}'
 
 # Paid loop, step 2: sign the requirements with x402.client, retry with
 #   PAYMENT-SIGNATURE: <base64 signed x402 payload>
 #   -> 200 + ScanReport + PAYMENT-RESPONSE (settlement tx)
-curl -i -X POST http://127.0.0.1:8000/v1/scan \
+curl -i -X POST https://dainius-raulinaitis--preflight-api-api.us-east.modal.run/v1/scan \
   -H 'Content-Type: application/json' \
   -H 'PAYMENT-SIGNATURE: <base64>' \
   -d '{"source":"contract Bad {}"}'
