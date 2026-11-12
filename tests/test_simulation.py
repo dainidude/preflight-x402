@@ -167,8 +167,12 @@ class TestRunSimulation:
             to="0xdAC17F958D2ee523a2206206994597C13D831ec7", data="0x1234"
         )
         report = await run_simulation(req)
-        assert report.verdict == "looks_ok"
-        assert any(f.id == "sim:rpc-failure" for f in report.findings)
+        # Grill fix: RPC failure must surface as review, never "looks_ok" —
+        # a paying customer can't be told "safe" when we couldn't check.
+        assert report.verdict == "review"
+        assert any(
+            f.id == "sim:rpc-failure" and f.severity == "medium" for f in report.findings
+        )
         assert "RPC" in " ".join(report.notes)
 
     @pytest.mark.asyncio
