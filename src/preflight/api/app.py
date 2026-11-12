@@ -141,6 +141,12 @@ async def x402_fanout(request: Request) -> dict[str, Any]:
     }
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon() -> Response:
+    return _serve_public("favicon.svg")
+
+
 @app.post("/v1/scan")
 async def scan_source(request: ScanRequest, raw: Request) -> Response:
     """Scan Solidity source — $0.01 via x402."""
@@ -278,21 +284,27 @@ def _openapi_with_x402() -> dict[str, Any]:
     pay_to = config().pay_to_address
     if pay_to:
         schema.setdefault("x-discovery", {})["ownershipProofs"] = [pay_to]
+    schema["info"]["contact"] = {
+        "name": "Preflight",
+        "url": "https://github.com/dainidude/preflight-x402",
+    }
 
     for path, methods in schema.get("paths", {}).items():
         amount = _PAID_PATHS.get(path)
-        if not amount:
-            continue
         for method, op in methods.items():
             if method.lower() not in {"post", "get", "put", "patch", "delete"}:
                 continue
-            op["x-payment-info"] = {
-                "protocols": ["x402"],
-                "price": {"mode": "fixed", "currency": "USD", "amount": amount},
-            }
-            op.setdefault("responses", {})["402"] = {
-                "description": "x402 Payment Required (PAYMENT-REQUIRED header + accepts)",
-            }
+            if amount:
+                # x402scan's zod schema wants protocols as an array of records.
+                op["x-payment-info"] = {
+                    "protocols": [{"x402": {}}],
+                    "price": {"mode": "fixed", "currency": "USD", "amount": amount},
+                }
+                op.setdefault("responses", {})["402"] = {
+                    "description": "x402 Payment Required (PAYMENT-REQUIRED header + accepts)",
+                }
+            else:
+                op["security"] = []  # explicitly public (kills auth-mode warnings)
 
     app.openapi_schema = schema
     return schema

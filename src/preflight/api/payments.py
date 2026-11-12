@@ -52,6 +52,8 @@ FREE_ROUTES = {
     "GET /health",
     "GET /metrics",
     "GET /llms.txt",
+    "GET /favicon.ico",
+    "GET /favicon.svg",
     "GET /.well-known/x402.json",
     "GET /.well-known/x402",
 }
