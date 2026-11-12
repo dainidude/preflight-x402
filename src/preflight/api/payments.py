@@ -160,7 +160,19 @@ def _resource_server(cfg: Config) -> x402ResourceServer:
     if _server is None:
         from x402.extensions.bazaar import bazaar_resource_server_extension
 
-        facilitator = HTTPFacilitatorClient({"url": cfg.facilitator_url})
+        if cfg.cdp_api_key_id and cfg.cdp_api_key_secret:
+            # Coinbase CDP Facilitator: KYT/OFAC on every tx + Bazaar indexing
+            # (a settled payment through CDP is what triggers discovery).
+            from cdp.x402 import create_facilitator_config
+
+            facilitator = HTTPFacilitatorClient(
+                create_facilitator_config(
+                    api_key_id=cfg.cdp_api_key_id,
+                    api_key_secret=cfg.cdp_api_key_secret,
+                )
+            )
+        else:
+            facilitator = HTTPFacilitatorClient({"url": cfg.facilitator_url})
         _server = x402ResourceServer(facilitator)
         _server.register(NETWORK_CAIP[cfg.network], ExactEvmServerScheme())
         # Bazaar discovery layer: makes this server's routes findable by

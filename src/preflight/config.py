@@ -49,6 +49,11 @@ class Config:
             or NETWORK_USDC.get(self.network, NETWORK_USDC["base-sepolia"])
         )
         self.client_private_key: str | None = os.getenv("CLIENT_PRIVATE_KEY")
+        # CDP Facilitator credentials (optional): when both are set, the server
+        # verifies/settles via Coinbase's CDP Facilitator (KYT/OFAC + the Bazaar
+        # discovery that indexes settled payments). Fallback: x402.org facilitator.
+        self.cdp_api_key_id: str | None = os.getenv("CDP_API_KEY_ID")
+        self.cdp_api_key_secret: str | None = os.getenv("CDP_API_KEY_SECRET")
 
     @classmethod
     def reload(cls) -> Config:
