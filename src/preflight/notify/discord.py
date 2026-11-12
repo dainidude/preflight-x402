@@ -32,7 +32,7 @@ def _embed(route: str, amount_base_units: int, payer: str | None, tx_hash: str) 
         {"name": "Product", "value": f"`{route}`", "inline": True},
         {"name": "Amount", "value": f"${usdc:.3f}", "inline": True},
         {"name": "Payer", "value": f"`{payer or 'unknown'}`", "inline": False},
-        {"name": "Settlement tx", "value": f"`{tx_hash[:20]}…`", "inline": False},
+        {"name": "Settlement tx", "value": f"`{(tx_hash or "unknown")[:20]}`", "inline": False},
     ]
     return {
         "username": "Preflight Sales",

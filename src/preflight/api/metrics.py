@@ -64,31 +64,35 @@ class MetricsCollector:
             self._payment_required_total = dict(data.get("payment_required_total", {}))
 
     def _maybe_flush(self, force: bool = False) -> None:
-        """Throttled atomic snapshot write; never raises. force=True skips the window."""
+        """Throttled atomic snapshot write; never raises. force=True skips the window.
+
+        The snapshot payload is built INSIDE the lock so concurrent record_*
+        calls can't tear it (grill finding #6); file I/O happens outside.
+        """
         if not self._state_file:
             return
-        now = time.monotonic()
-        if not force and now - self._last_flush < _FLUSH_INTERVAL_S:
-            return
-        self._last_flush = now
+        with self._lock:
+            now = time.monotonic()
+            if not force and now - self._last_flush < _FLUSH_INTERVAL_S:
+                return
+            self._last_flush = now
+            payload = json.dumps(
+                {
+                    "scans_total": self._scans_total,
+                    "scans_by_verdict": self._scans_by_verdict,
+                    "scans_paid": self._scans_paid,
+                    "scans_free": self._scans_free,
+                    "settlements_total": self._settlements_total,
+                    "revenue_base_units": self._revenue_base_units,
+                    "unique_payers": list(self._unique_payers.keys()),
+                    "free_tier_grants": self._free_tier_grants,
+                    "rate_limited_total": self._rate_limited_total,
+                    "payment_required_total": self._payment_required_total,
+                }
+            )
         try:
             tmp = self._state_file.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps(
-                    {
-                        "scans_total": self._scans_total,
-                        "scans_by_verdict": self._scans_by_verdict,
-                        "scans_paid": self._scans_paid,
-                        "scans_free": self._scans_free,
-                        "settlements_total": self._settlements_total,
-                        "revenue_base_units": self._revenue_base_units,
-                        "unique_payers": list(self._unique_payers.keys()),
-                        "free_tier_grants": self._free_tier_grants,
-                        "rate_limited_total": self._rate_limited_total,
-                        "payment_required_total": self._payment_required_total,
-                    }
-                )
-            )
+            tmp.write_text(payload)
             tmp.replace(self._state_file)
         except OSError:
             pass

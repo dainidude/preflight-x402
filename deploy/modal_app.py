@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 # Values injected into the deployed container at deploy time.
 DEPLOY_ENV = {
     "PREFLIGHT_PAY_TO_ADDRESS": os.getenv("PREFLIGHT_PAY_TO_ADDRESS", ""),
-    "PREFLIGHT_NETWORK": os.getenv("PREFLIGHT_NETWORK", "base-sepolia"),
+    "PREFLIGHT_NETWORK": os.getenv("PREFLIGHT_NETWORK", "base"),
     "PREFLIGHT_FACILITATOR": os.getenv("PREFLIGHT_FACILITATOR", "https://x402.org/facilitator"),
     "PREFLIGHT_PORT": "8000",
     "DEV_MODE": "0",
@@ -48,6 +48,11 @@ image = (
     # Pre-bake solc so the first scan is fast (py-solc-x downloads to ~/.solcx).
     .run_commands(
         "python -c \"import solcx; [solcx.install_solc(v) for v in ('0.8.20','0.8.24','0.8.26')]\"",
+    )
+    # Bake anvil so the deep simulation tier works in-container.
+    .run_commands(
+        "python -c \"import urllib.request; urllib.request.urlretrieve('https://github.com/foundry-rs/foundry/releases/download/v1.9.0/foundry_v1.9.0_linux_amd64.tar.gz', '/tmp/foundry.tar.gz')\"",
+        "tar -xzf /tmp/foundry.tar.gz -C /usr/local/bin anvil && anvil --version",
     )
     # No copy=True: files are mounted fresh at container start, so every
     # deploy serves the latest source and public/ without image rebuilds.

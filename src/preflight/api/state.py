@@ -237,6 +237,8 @@ def format_digest(metrics: Dict[str, Any]) -> str:
         lines.append(f"  • {verdict}: {count}")
     
     lines.append("")
-    lines.append(f"📊 Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    from datetime import datetime, timezone
+
+    lines.append(f"📊 Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     
     return '\n'.join(lines)

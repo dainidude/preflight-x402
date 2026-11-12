@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from datetime import datetime, timezone
 from collections import defaultdict, deque
 from typing import Any, Callable
 
@@ -99,7 +100,7 @@ ROUTE_BAZAAR: dict[str, dict] = {
         ),
     ),
     "POST /v1/sim": declare_discovery_extension(
-        input={"to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "data": "0x", "value_wei": "0"},
+        input={"to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "data": "0x", "value_wei": "0"},
         input_schema={
             "properties": {
                 "to": {"type": "string", "description": "Target contract address"},
@@ -112,7 +113,7 @@ ROUTE_BAZAAR: dict[str, dict] = {
         output=OutputConfig(example={"verdict": "review", "reverted": True, "revert_reason": "…"}),
     ),
     "POST /v1/sim/deep": declare_discovery_extension(
-        input={"to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "data": "0x", "value_wei": "0"},
+        input={"to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "data": "0x", "value_wei": "0"},
         input_schema={
             "properties": {
                 "to": {"type": "string", "description": "Target contract address"},
@@ -306,19 +307,22 @@ class UsageTracker:
         payer = request.headers.get("x-payer")
         if payer:
             return payer.lower()
-        client = request.client.host if request.client else "unknown"
+        # Behind proxies (Modal, Cloudflare) request.client.host is the proxy —
+        # prefer the first X-Forwarded-For hop so per-client quotas stay real.
+        fwd = request.headers.get("x-forwarded-for", "")
+        client = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
         ua = request.headers.get("user-agent", "")
         return hashlib.sha256(f"{client}|{ua}".encode()).hexdigest()[:20]
 
     def free_left(self, ident: str) -> int:
-        today = time.strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         day, used = self._free_day.get(ident, (today, 0))
         if day != today:
             return FREE_TIER_DAILY
         return max(0, FREE_TIER_DAILY - used)
 
     def consume_free(self, ident: str) -> bool:
-        today = time.strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         day, used = self._free_day.get(ident, (today, 0))
         if day != today:
             used = 0
@@ -392,6 +396,10 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     cfg = config()
     request.state.pf_paid = False
+    # Production sanity on EVERY paid request: Modal/ASGI never runs __main__,
+    # so this is the only place a misconfigured pay_to gets caught (grill #4).
+    if not cfg.dev_mode:
+        validate_pay_to_address()
 
     if cfg.dev_mode:
         response = await call_next(request)

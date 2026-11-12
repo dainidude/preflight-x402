@@ -89,7 +89,7 @@ async def root() -> dict[str, Any]:
         "payment": {
             "protocol": "x402",
             "network": config().network,
-            "asset": "USDC (test)",
+            "asset": "USDC",
             "facilitator": config().facilitator_url,
         },
         "endpoints": {
@@ -150,7 +150,9 @@ async def favicon() -> Response:
 @app.post("/v1/scan")
 async def scan_source(request: ScanRequest, raw: Request) -> Response:
     """Scan Solidity source — $0.01 via x402."""
-    sha = hashlib.sha256(request.source.encode()).hexdigest()
+    sha = hashlib.sha256(
+        f"{request.contract_name}\x00{request.solc_version}\x00{request.source}".encode()
+    ).hexdigest()
     cached = _cache.get(sha)
     if cached is not None:
         return JSONResponse(cached)
@@ -158,14 +160,19 @@ async def scan_source(request: ScanRequest, raw: Request) -> Response:
     report: ScanReport = await _call_core(
         _get_run_analysis(), request.source, request.contract_name, request.solc_version
     )
-    return _finalize(report, route="POST /v1/scan", paid=getattr(raw.state, "pf_paid", False))
+    return _finalize(
+        report, route="POST /v1/scan", paid=getattr(raw.state, "pf_paid", False), cache_key=sha
+    )
 
 
 @app.post("/v1/scan/project")
 async def scan_project(request: ProjectScanRequest, raw: Request) -> Response:
     """Scan a multi-file project — $0.10 via x402."""
     files_key = hashlib.sha256(
-        "\n".join(f"{k}:{v}" for k, v in sorted(request.files.items())).encode()
+        (
+            f"{request.contract_name}\x00{request.solc_version}\x00"
+            + "\n".join(f"{k}:{v}" for k, v in sorted(request.files.items()))
+        ).encode()
     ).hexdigest()
     cached = _cache.get(files_key)
     if cached is not None:
@@ -174,7 +181,12 @@ async def scan_project(request: ProjectScanRequest, raw: Request) -> Response:
     report: ScanReport = await _call_core(
         _get_run_analysis_project(), request.files, request.contract_name, request.solc_version
     )
-    return _finalize(report, route="POST /v1/scan/project", paid=getattr(raw.state, "pf_paid", False))
+    return _finalize(
+        report,
+        route="POST /v1/scan/project",
+        paid=getattr(raw.state, "pf_paid", False),
+        cache_key=files_key,
+    )
 
 
 @app.post("/v1/sim")
@@ -230,7 +242,14 @@ def address_risk(request: AddressRiskRequest, raw: Request) -> Response:
             )
         )
 
-    verdict = "review" if any(f.severity == "medium" for f in findings) else "looks_ok"
+    # Same severity rule as core scoring: critical/high → block, medium → review.
+    severities = {f.severity for f in findings}
+    if severities & {"critical", "high"}:
+        verdict = "block"
+    elif "medium" in severities:
+        verdict = "review"
+    else:
+        verdict = "looks_ok"
     report = AddressRiskReport(
         verdict=verdict,
         address=addr,
@@ -260,11 +279,16 @@ async def _call_core(func: Any, *args: Any) -> ScanReport:
     return result
 
 
-def _finalize(report: ScanReport, route: str = "POST /v1/scan", paid: bool = False) -> Response:
+def _finalize(
+    report: ScanReport,
+    route: str = "POST /v1/scan",
+    paid: bool = False,
+    cache_key: str | None = None,
+) -> Response:
     body = report.model_dump(mode="json")
     if body.get("attestation") is None:
         body["attestation"] = sign_report(body)
-    _cache.put(report.source_sha256, body)
+    _cache.put(cache_key or report.source_sha256, body)
     from preflight.api.metrics import collector
 
     collector.record_scan(route, report.verdict, paid)
