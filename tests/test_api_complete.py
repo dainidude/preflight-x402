@@ -19,30 +19,35 @@ from preflight.api.app import app  # noqa: E402
 from preflight.config import Config  # noqa: E402
 from preflight.types import ScanReport  # noqa: E402
 
-REQ_DICT = {
-    "scheme": "exact",
-    "network": "eip155:84532",
-    "maxAmountRequired": "10000",
-    "resource": "http://testserver/v1/scan",
-    "description": "Smart-contract security scan",
-    "mimeType": "application/json",
-    "payTo": "0x" + "11" * 20,
-    "maxTimeoutSeconds": 60,
-    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    "extra": {"name": "USDC", "version": "2"},
-}
+from x402.schemas.payments import PaymentRequirements  # noqa: E402
+
+
+def make_requirements(amount: str = "10000") -> list[PaymentRequirements]:
+    """Real PaymentRequirements so the 402 builder exercises the true spec path."""
+    return [
+        PaymentRequirements(
+            scheme="exact",
+            network="eip155:84532",
+            asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            amount=amount,
+            pay_to="0x" + "11" * 20,
+            max_timeout_seconds=60,
+            extra={"name": "USDC", "version": "2", "description": "Smart-contract security scan"},
+        )
+    ]
 
 
 class FakeRequirements:
-    """Stands in for PaymentRequirements without touching the x402 server."""
+    """Compatibility alias — tests monkeypatch build_requirements with real models."""
 
-    def model_dump(self, **_: object) -> dict:
-        return dict(REQ_DICT)
+    @staticmethod
+    def model_dump(**_: object) -> dict:
+        raise AssertionError("use make_requirements(), not FakeRequirements")
 
 
 @pytest.fixture()
 def prod_client(prod_env: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: make_requirements())
     monkeypatch.setattr(app_mod, "_run_analysis", lambda s, cn=None, sv=None: ScanReport(
         verdict="looks_ok", score=0.0, findings=[], contract_name=cn,
         solc_version=sv or "0.8.20", scanner_versions={"slither": "0.11.6"},
@@ -55,16 +60,19 @@ def prod_client(prod_env: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 def test_unpaid_request_gets_spec_shaped_402(prod_client: TestClient) -> None:
     r = prod_client.post("/v1/scan", json={"source": "contract A {}"})
     assert r.status_code == 402, r.text
-    # body is spec-shaped
+    # body is spec-shaped (V2): version 2, resource info, accepts with bazaar
     body = r.json()
-    assert body["x402Version"] == 1
+    assert body["x402Version"] == 2
     assert body["accepts"][0]["scheme"] == "exact"
     assert body["accepts"][0]["payTo"].startswith("0x")
-    # PAYMENT-REQUIRED header carries base64 JSON of the requirements
+    assert body["accepts"][0]["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
+    assert body["resource"]["serviceName"] == "Preflight"
+    # PAYMENT-REQUIRED header carries base64 JSON of the full PaymentRequired
     header = r.headers.get("payment-required")
     assert header, "PAYMENT-REQUIRED header missing"
     decoded = json.loads(base64.b64decode(header))
-    assert decoded[0]["network"] == "eip155:84532"
+    assert decoded["x402Version"] == 2
+    assert decoded["accepts"][0]["network"] == "eip155:84532"
 
 
 def test_malformed_signature_gets_402(prod_client: TestClient) -> None:
@@ -81,7 +89,7 @@ def test_free_tier_grants_then_exhausts(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("DEV_MODE", "0")
     monkeypatch.setenv("FREE_TIER", "1")
     Config.reload()
-    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: make_requirements())
     monkeypatch.setattr(app_mod, "_run_analysis", lambda s, cn=None, sv=None: ScanReport(
         verdict="looks_ok", score=0.0, findings=[], contract_name=None,
         solc_version="0.8.20", scanner_versions={"slither": "0.11.6"},
@@ -104,7 +112,7 @@ def test_no_header_means_immediate_402(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEV_MODE", "0")
     monkeypatch.setenv("FREE_TIER", "1")
     Config.reload()
-    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: make_requirements())
     pay_mod.usage = pay_mod.UsageTracker()
     with TestClient(app) as c:
         r = c.post("/v1/scan", json={"source": "contract A {}"})

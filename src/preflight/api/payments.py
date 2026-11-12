@@ -273,19 +273,42 @@ usage = UsageTracker()
 # Middleware
 # ---------------------------------------------------------------------------
 
-def _payment_required_response(route: str, requirements: list[PaymentRequirements]) -> Response:
+def _payment_required_response(
+    route: str,
+    requirements: list[PaymentRequirements],
+    request: Request,
+) -> Response:
+    """Spec-shaped x402 V2 402: body + PAYMENT-REQUIRED header both carry the
+    full PaymentRequired (version 2, resource, accepts) with the route's
+    Bazaar declaration attached."""
     from fastapi.responses import JSONResponse
+    from x402.schemas.payments import PaymentRequired, ResourceInfo
 
-    accepts = _with_bazaar(route, requirements)
-    payload = json.dumps(accepts)
+    price, description = ROUTE_PRICES[route]
+    resource = ResourceInfo(
+        url=str(request.url),
+        description=description,
+        mime_type="application/json",
+        service_name="Preflight",
+        tags=["security", "solidity", "smart-contracts", "simulation"],
+    )
+    body = PaymentRequired(
+        error=f"Payment required for {route}",
+        resource=resource,
+        accepts=requirements,
+    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+    body["accepts"] = _with_bazaar(route, requirements)
+    encoded = safe_base64_encode(
+        PaymentRequired(
+            error=f"Payment required for {route}",
+            resource=resource,
+            accepts=requirements,
+        ).model_dump_json(by_alias=True, exclude_none=True)
+    )
     return JSONResponse(
         status_code=402,
-        content={
-            "x402Version": 1,
-            "error": f"Payment required for {route}",
-            "accepts": accepts,
-        },
-        headers={PAYMENT_REQUIRED_HEADER: safe_base64_encode(payload)},
+        content=body,
+        headers={PAYMENT_REQUIRED_HEADER: encoded, "Cache-Control": "no-store"},
     )
 
 
@@ -325,7 +348,7 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     if not signature:
         collector.record_402(route)
-        return _payment_required_response(route, requirements)
+        return _payment_required_response(route, requirements, request)
 
     try:
         payload = parse_payment_header(signature)
