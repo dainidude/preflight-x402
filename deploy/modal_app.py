@@ -30,6 +30,9 @@ DEPLOY_ENV = {
     "PREFLIGHT_ATTEST_KEY": os.getenv("PREFLIGHT_ATTEST_KEY", ""),
     "RPC_URL": os.getenv("RPC_URL", "https://sepolia.base.org"),
     "DISCORD_WEBHOOK_URL": os.getenv("DISCORD_WEBHOOK_URL", ""),
+    # CDP Facilitator (set ⇒ verify/settle via Coinbase KYT/OFAC + Bazaar indexing)
+    "CDP_API_KEY_ID": os.getenv("CDP_API_KEY_ID", ""),
+    "CDP_API_KEY_SECRET": os.getenv("CDP_API_KEY_SECRET", ""),
 }
 
 image = (
