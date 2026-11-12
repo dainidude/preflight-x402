@@ -118,10 +118,12 @@ def _revert_finding(reason: str) -> Finding:
 
 
 def _rpc_failure_finding(context: str) -> Finding:
+    # Medium (→ verdict "review"): a paying customer must never read an
+    # RPC failure as "contract is safe" (grill finding — verdict integrity).
     return Finding(
         id="sim:rpc-failure",
         title="RPC simulation unavailable",
-        severity="info",
+        severity="medium",
         confidence=0.9,
         description=context,
         snippet=None,
@@ -130,10 +132,12 @@ def _rpc_failure_finding(context: str) -> Finding:
 
 
 def _deep_unavailable_finding(context: str) -> Finding:
+    # Medium for the same reason: the customer PAID for deep — a quick-mode
+    # fallback must surface as "review", not a silent downgrade.
     return Finding(
         id="sim:deep-unavailable",
         title="Deep simulation unavailable",
-        severity="low",
+        severity="medium",
         confidence=0.9,
         description=context,
         snippet=None,
