@@ -107,10 +107,10 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "time": _now()}
 
 
-def _serve_public(path: str) -> Response:
+def _serve_public(path: str, media_type: str = "text/plain") -> Response:
     full = REPO_ROOT / "public" / path
     try:
-        return PlainTextResponse(full.read_text())
+        return Response(content=full.read_text(), media_type=media_type)
     except FileNotFoundError:
         return JSONResponse({"error": f"{path} not published yet"}, status_code=404)
 
@@ -122,7 +122,7 @@ async def llms_txt() -> Response:
 
 @app.get("/.well-known/x402.json")
 async def x402_well_known() -> Response:
-    return _serve_public(".well-known/x402.json")
+    return _serve_public(".well-known/x402.json", media_type="application/json")
 
 
 @app.get("/.well-known/x402")
@@ -144,7 +144,7 @@ async def x402_fanout(request: Request) -> dict[str, Any]:
 @app.get("/favicon.ico", include_in_schema=False)
 @app.get("/favicon.svg", include_in_schema=False)
 async def favicon() -> Response:
-    return _serve_public("favicon.svg")
+    return _serve_public("favicon.svg", media_type="image/svg+xml")
 
 
 @app.post("/v1/scan")
@@ -288,6 +288,16 @@ def _openapi_with_x402() -> dict[str, Any]:
         "name": "Preflight",
         "url": "https://github.com/dainidude/preflight-x402",
     }
+    schema["info"]["x-guidance"] = (
+        "Paid smart-contract security API. POST Solidity source to /v1/scan "
+        "($0.01), a transaction to /v1/sim ($0.05), multi-file projects to "
+        "/v1/scan/project ($0.10), or an address to /v1/address-risk "
+        "($0.005). Each POST returns HTTP 402 with payment requirements; pay "
+        "via the x402 protocol (USDC, Base) and retry with the PAYMENT-SIGNATURE "
+        "header to receive a severity-scored, EIP-712-attested verdict: "
+        "looks_ok | review | block. First 10 scans/day are free with the "
+        "X-Preflight-Free: trial header. Full service description at /llms.txt."
+    )
 
     for path, methods in schema.get("paths", {}).items():
         amount = _PAID_PATHS.get(path)
