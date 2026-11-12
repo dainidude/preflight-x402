@@ -18,7 +18,7 @@ import pay_client  # noqa: E402
 from x402.http.utils import decode_payment_signature_header, safe_base64_encode  # noqa: E402
 from x402.schemas import PaymentRequirements, PaymentRequired, SettleResponse  # noqa: E402
 
-USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 PAY_TO = "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"
 # Deterministic throwaway key for offline tests ONLY — never a funded wallet.
 PRIVATE_KEY = "0x" + "33" * 32
@@ -81,7 +81,7 @@ def _requirements() -> list[PaymentRequirements]:
     return [
         PaymentRequirements(
             scheme="exact",
-            network="eip155:84532",
+            network="eip155:8453",
             asset=USDC,
             amount="10000",
             pay_to=PAY_TO,
@@ -115,7 +115,7 @@ def _settle_header() -> str:
         success=True,
         payer="0xc5925C971f5628ba1E195C83Ce83317A70b3f30B",
         transaction="0x" + "ab" * 32,
-        network="eip155:84532",
+        network="eip155:8453",
         amount="10000",
     )
     return safe_base64_encode(settle.model_dump_json())
@@ -134,7 +134,7 @@ def test_parse_payment_required_bare_array_header() -> None:
         b"",
     )
     assert parsed.x402_version == 2
-    assert parsed.accepts[0].network == "eip155:84532"
+    assert parsed.accepts[0].network == "eip155:8453"
     assert parsed.accepts[0].amount == "10000"
     assert parsed.accepts[0].asset == USDC
 
@@ -157,7 +157,7 @@ def test_create_payment_signs_correct_amount() -> None:
     payment = pay_client.create_payment(payment_required, PRIVATE_KEY)
     assert payment.x402_version == 2
     assert payment.accepted.amount == "10000"
-    assert payment.accepted.network == "eip155:84532"
+    assert payment.accepted.network == "eip155:8453"
     assert "signature" in payment.payload
     assert "authorization" in payment.payload
 
@@ -239,6 +239,9 @@ def test_route_table_prices() -> None:
     assert pay_client.ROUTES["scan"].amount_base_units == "10000"
     assert pay_client.ROUTES["sim"].path == "/v1/sim"
     assert pay_client.ROUTES["sim"].amount_base_units == "50000"
+    assert pay_client.ROUTES["sim-deep"].path == "/v1/sim/deep"
+    assert pay_client.ROUTES["sim-deep"].amount_base_units == "250000"
+    assert pay_client.ROUTES["sim-deep"].price == "$0.25"
     assert pay_client.ROUTES["project"].path == "/v1/scan/project"
     assert pay_client.ROUTES["project"].amount_base_units == "100000"
     assert pay_client.ROUTES["address-risk"].path == "/v1/address-risk"
@@ -277,6 +280,21 @@ def test_sim_payload_custom() -> None:
     }
 
 
+def test_sim_deep_route_payload_shape() -> None:
+    route = pay_client.ROUTES["sim-deep"]
+    assert route.path == "/v1/sim/deep"
+    assert route.price == "$0.25"
+    assert route.amount_base_units == "250000"
+
+    payload = pay_client.build_payload(
+        "sim-deep", to=PAY_TO, data="0xdeadbeef", value_wei="7"
+    )
+    # Same SimRequest body as quick sim; /v1/sim/deep forces mode=deep server-side.
+    assert payload == {"to": PAY_TO, "data": "0xdeadbeef", "value_wei": "7"}
+    assert "mode" not in payload
+    assert pay_client.build_payload("sim-deep")["to"] == USDC
+
+
 def test_sim_payload_rejects_bad_address_and_data() -> None:
     with pytest.raises(ValueError):
         pay_client.sim_payload(to="0xnope")
@@ -292,12 +310,13 @@ def test_build_payload_all_routes() -> None:
         "project", files={"X.sol": "contract X {}"}, contract_name="X"
     ) == {"files": {"X.sol": "contract X {}"}, "contract_name": "X"}
     assert pay_client.build_payload("sim")["to"] == USDC
+    assert pay_client.build_payload("sim-deep")["to"] == USDC
     assert pay_client.build_payload("address-risk", address=PAY_TO) == {"address": PAY_TO}
     with pytest.raises(ValueError):
         pay_client.build_payload("address-risk")
 
 
-@pytest.mark.parametrize("route_name", ["sim", "project", "address-risk"])
+@pytest.mark.parametrize("route_name", ["sim", "sim-deep", "project", "address-risk"])
 def test_post_paid_route_amount_and_path(route_name: str) -> None:
     route = pay_client.ROUTES[route_name]
     seen: list[httpx.Request] = []
@@ -307,7 +326,7 @@ def test_post_paid_route_amount_and_path(route_name: str) -> None:
         if "PAYMENT-SIGNATURE" in request.headers:
             decoded = decode_payment_signature_header(request.headers["PAYMENT-SIGNATURE"])
             assert decoded.accepted.amount == route.amount_base_units
-            body = SIM_REPORT if route_name == "sim" else REPORT
+            body = SIM_REPORT if route_name.startswith("sim") else REPORT
             return httpx.Response(
                 200, json=body, headers={"PAYMENT-RESPONSE": _settle_header()}
             )
@@ -391,7 +410,7 @@ def test_load_or_create_key_persists(tmp_path: Path) -> None:
 @pytest.mark.network
 def test_get_usdc_balance_network() -> None:
     balance = pay_client.get_usdc_balance(
-        "0xc5925C971f5628ba1E195C83Ce83317A70b3f30B",
-        "https://sepolia.base.org",
+        "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41",
+        pay_client.DEFAULT_RPC_URL,
     )
     assert isinstance(balance, int)

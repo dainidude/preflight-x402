@@ -25,8 +25,8 @@ All in `.env` (gitignored; copy `.env.example`):
 
 ```
 PREFLIGHT_PAY_TO_ADDRESS=<receiving wallet>   # REQUIRED in prod mode
-PREFLIGHT_NETWORK=base-sepolia               # or "base" for mainnet
-PREFLIGHT_FACILITATOR=https://x402.org/facilitator
+PREFLIGHT_NETWORK=base                        # production is BASE MAINNET (real USDC); base-sepolia = dev sandbox
+PREFLIGHT_FACILITATOR=https://api.cdp.coinbase.com/platform/v2/x402  # CDP (set via CDP keys) — fallback: https://x402.org/facilitator
 PREFLIGHT_PORT=8000
 DEV_MODE=0                                   # 1 = payment bypass (dev only!)
 FREE_TIER=1

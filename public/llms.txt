@@ -14,24 +14,31 @@
 | GET | `/metrics` | free | none |
 | POST | `/v1/scan` | $0.01 | x402 |
 | POST | `/v1/sim` | $0.05 | x402 |
+| POST | `/v1/sim/deep` | $0.25 | x402 |
 | POST | `/v1/scan/project` | $0.10 | x402 |
 | POST | `/v1/address-risk` | $0.005 | x402 |
 
 Free trial: send header `X-Preflight-Free: trial` to get your first 10
 scans/day free (opt-in; requests without the header are paywalled normally).
 
-`/v1/sim` is transaction pre-flight simulation: give a target `to`, optional
-0x-hex calldata `data`, and optional `value_wei`; get back a `SimReport` with
-`reverted`, `revert_reason`, `gas_used`, and severity-scored findings (a
-reverting call is a real finding, not a client error). `/metrics` exposes
-revenue and usage counters (for example `revenue_base_units`) with no payment.
+`/v1/sim` is quick transaction pre-flight simulation: give a target `to`,
+optional 0x-hex calldata `data`, and optional `value_wei`; get back a
+`SimReport` with `reverted`, `revert_reason`, `gas_used`, and severity-scored
+findings (a reverting call is a real finding, not a client error).
+
+`/v1/sim/deep` runs the same request on a local anvil fork ($0.25) and adds
+measured `gas_used`, the sender's `balance_delta_wei`, and the `internal_calls`
+trace — use it for honeypot/MEV checks where a bare `eth_call` is not enough.
+
+`/metrics` exposes revenue and usage counters (for example
+`revenue_base_units`) with no payment.
 
 ## Payment
 
 - Network: `base` (CAIP-2 `eip155:8453`, Base mainnet)
-- Asset: test USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (6 decimals)
+- Asset: USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 decimals)
 - Scheme: `exact` (EIP-3009 transfer-with-authorization)
-- Pay to: `0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa`
+- Pay to: `0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41`
 - Facilitator: `https://x402.org/facilitator`
 
 A paid route responds `402 Payment Required` with a `PAYMENT-REQUIRED` header
@@ -55,7 +62,7 @@ paid response carries a `PAYMENT-RESPONSE` header with the settlement result.
 
 ```json
 {
-  "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "data": "0xa9059cbb...",
   "value_wei": "0",
   "from_address": "0x...",
@@ -75,7 +82,7 @@ transfer. `source` is optional Solidity source for static honeypot detectors.
 `POST /v1/address-risk`:
 
 ```json
-{"address": "0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa"}
+{"address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"}
 ```
 
 ## Response (ScanReport)
@@ -118,17 +125,26 @@ transfer. `source` is optional Solidity source for static honeypot detectors.
       "detector": "heuristic:simulation"
     }
   ],
-  "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "from_address": "0x...",
   "value_wei": "0",
   "reverted": true,
   "revert_reason": "ERC20: transfer amount exceeds balance",
   "gas_used": "24312",
+  "balance_delta_wei": "0",
+  "internal_calls": [
+    "0x833589…cf7e → transfer(address,uint256) 0xa9059cbb",
+    "0x833589…cf7e → revert ERC20: transfer amount exceeds balance"
+  ],
   "simulated_at": "2026-11-10T00:00:00Z",
   "simulator": "rpc-ethcall:v1",
   "attestation": null
 }
 ```
+
+With `POST /v1/sim/deep` the same shape is returned with `simulator:
+"anvil-fork:v1"`, measured `gas_used`, a non-zero `balance_delta_wei` when the
+call moves value, and the full `internal_calls` trace.
 
 ## curl examples
 
@@ -161,14 +177,22 @@ curl -i -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/scan \
 #   request -> 402 -> build payment via x402.client -> retry -> verdict
 uv run python client/pay_client.py --route scan --file contract.sol
 uv run python client/pay_client.py --route sim    # zero-arg revert demo
+uv run python client/pay_client.py --route sim-deep  # $0.25 anvil fork
+
+# Deep simulation (paid): same 402 -> PAYMENT-SIGNATURE retry loop
+curl -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/sim/deep \
+  -H 'Content-Type: application/json' \
+  -H 'PAYMENT-SIGNATURE: <base64>' \
+  -d '{"to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","data":"0xa9059cbb...","value_wei":"0"}'
 ```
 
 ## MCP
 
 An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01)
-and `preflight_sim {to, data?, value_wei?}` ($0.05), plus free
-`preflight_pricing`. Run it with `uv run python -m preflight.mcp.server`
-(stdio) or `--http` for streamable HTTP.
+and `preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep),
+plus free `preflight_pricing`. Set `mode: "deep"` to use `/v1/sim/deep`.
+Run it with `uv run python -m preflight.mcp.server` (stdio) or `--http` for
+streamable HTTP.
 
 ## Dev mode
 

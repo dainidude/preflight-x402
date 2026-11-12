@@ -8,17 +8,23 @@ Routes (``--route``):
 
 * ``scan`` (default) — ``POST /v1/scan`` ($0.01), body ``{source, contract_name?}``
 * ``sim`` — ``POST /v1/sim`` ($0.05), body ``{to, data?, value_wei?}``
+* ``sim-deep`` — ``POST /v1/sim/deep`` ($0.25), anvil fork: gas, balance deltas,
+  internal calls (same body as ``sim``; ``--deep`` upgrades ``--route sim``)
 * ``project`` — ``POST /v1/scan/project`` ($0.10), body ``{files, contract_name?}``
 * ``address-risk`` — ``POST /v1/address-risk`` ($0.005), body ``{address}``
 
-With ``--route sim`` and no ``--to`` it runs a zero-argument demo: a 0-value
-``transfer(address,uint256)`` call to the test-USDC contract for an amount the
-burner cannot hold. The simulated call reverts, which is a correct
+With ``--route sim`` (or ``sim-deep``) and no ``--to`` it runs a zero-argument
+demo: a 0-value ``transfer(address,uint256)`` call to the USDC contract for an
+amount the burner cannot hold. The simulated call reverts, which is a correct
 ``sim:revert`` finding — printed as such with exit code 0.
 
 In ``--dev`` mode it relies on the server's ``DEV_MODE`` (no wallet), which is
 the fastest way to smoke-test the stack. In normal mode it loads or generates a
-burner keypair, checks the Base Sepolia test-USDC balance, and pays the 402.
+burner keypair, checks the Base mainnet USDC balance, and pays the 402.
+
+Routes include deep transaction simulation (``--route sim-deep`` or
+``--route sim --deep``): an anvil local fork that reports gas, balance deltas,
+and internal calls ($0.25).
 
 Usage:
 
@@ -26,6 +32,8 @@ Usage:
     uv run python client/pay_client.py --route scan --file contract.sol
     uv run python client/pay_client.py --route sim --to 0x... --data 0x...
     uv run python client/pay_client.py --route sim          # revert demo
+    uv run python client/pay_client.py --route sim-deep     # $0.25 anvil fork
+    uv run python client/pay_client.py --route sim --deep   # same as sim-deep
     uv run python client/pay_client.py --route project --file A.sol --file B.sol
     uv run python client/pay_client.py --route address-risk --address 0x...
 """
@@ -62,10 +70,10 @@ from x402.schemas import PaymentPayload, PaymentRequired, PaymentRequirements
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO_ROOT / ".env"
-DEFAULT_RPC_URL = "https://sepolia.base.org"
-USDC_ASSET = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+DEFAULT_RPC_URL = "https://mainnet.base.org"
+USDC_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 USDC_DECIMALS = 6
-DEFAULT_SIM_RECIPIENT = "0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa"
+DEFAULT_SIM_RECIPIENT = "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"
 # Demo transfer amount: 1e18 base units (1e12 USDC) — far more than a burner
 # holds, so the simulated transfer() reverts with "insufficient balance".
 DEMO_TRANSFER_AMOUNT = 10**18
@@ -117,6 +125,7 @@ class Route:
 ROUTES: dict[str, Route] = {
     "scan": Route("scan", "/v1/scan", "$0.01", "10000"),
     "sim": Route("sim", "/v1/sim", "$0.05", "50000"),
+    "sim-deep": Route("sim-deep", "/v1/sim/deep", "$0.25", "250000"),
     "project": Route("project", "/v1/scan/project", "$0.10", "100000"),
     "address-risk": Route("address-risk", "/v1/address-risk", "$0.005", "5000"),
 }
@@ -271,6 +280,8 @@ def build_payload(
     if route == "project":
         return project_payload(files or {"VulnerableVault.sol": SAMPLE_SOURCE}, contract_name)
     if route == "sim":
+        return sim_payload(to, data, value_wei, from_address)
+    if route == "sim-deep":
         return sim_payload(to, data, value_wei, from_address)
     if address is None:
         raise ValueError("--route address-risk requires --address")
@@ -505,6 +516,11 @@ def print_sim_report(report: dict[str, Any], settle: dict[str, Any] | None) -> N
     print(f"reverted:       {report.get('reverted')}")
     print(f"revert_reason:  {report.get('revert_reason')}")
     print(f"gas_used:       {report.get('gas_used')}")
+    print(f"balance_delta:  {report.get('balance_delta_wei')}")
+    internal_calls = report.get("internal_calls") or []
+    print(f"internal_calls: {len(internal_calls)}")
+    for call in internal_calls:
+        print(f"  - {call}")
     print(f"simulated_at:   {report.get('simulated_at')}")
     print(f"simulator:      {report.get('simulator')}")
 
@@ -539,21 +555,17 @@ def _print_settlement(settle: dict[str, Any] | None) -> None:
 
 def print_result(route: str, report: dict[str, Any], settle: dict[str, Any] | None) -> None:
     """Render the right report shape for ``route``."""
-    if route == "sim" or "reverted" in report:
+    if route in {"sim", "sim-deep"} or "reverted" in report:
         print_sim_report(report, settle)
     else:
         print_report(report, settle)
 
 
-def _print_faucet_instructions(address: str) -> None:
-    print("USDC balance is 0 on Base Sepolia.")
-    print(f"Fund this burner address with test USDC ({USDC_ASSET}):")
-    print(f"  {address}")
-    print("Faucets:")
-    print("  - Circle USDC faucet: https://faucet.circle.com/ (select Base Sepolia, USDC)")
-    print("  - x402 testnet faucet (if available): https://x402.org")
-    print("After funding, re-run:")
-    print("  uv run python client/pay_client.py")
+def _print_funding_instructions(address: str) -> None:
+    print(
+        f"Fund {address} with USDC on Base mainnet to use paid calls "
+        f"(https://basescan.org/token/{USDC_ASSET})"
+    )
     print("Or skip the wallet entirely:")
     print("  uv run python client/pay_client.py --dev   (requires server DEV_MODE=1)")
 
@@ -581,6 +593,11 @@ def _parse_args() -> argparse.Namespace:
         help="Path to a .sol file (repeat for --route project).",
     )
     parser.add_argument("--contract-name", default=None, help="Target contract name.")
+    parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Upgrade --route sim to deep simulation (/v1/sim/deep, $0.25).",
+    )
     parser.add_argument("--to", default=None, help="Simulation target address (--route sim).")
     parser.add_argument("--data", default=None, help="0x-hex calldata (--route sim).")
     parser.add_argument("--value-wei", default=None, help="Wei value sent (--route sim).")
@@ -627,6 +644,10 @@ def route_is_project(route: str) -> bool:
 def main() -> None:
     """Entry point for ``python client/pay_client.py``."""
     args = _parse_args()
+    if args.deep:
+        if args.route not in {"sim", "sim-deep"}:
+            raise SystemExit("error: --deep only applies to --route sim / sim-deep")
+        args.route = "sim-deep"
 
     from preflight.config import config
 
@@ -654,7 +675,7 @@ def main() -> None:
     print(f"USDC balance:   {balance / 10**USDC_DECIMALS:.6f} ({balance} base units)")
 
     if balance <= 0:
-        _print_faucet_instructions(account.address)
+        _print_funding_instructions(account.address)
         return
 
     print(f"=== full x402 flow: POST {api_url}{route.path} ({route.price}) ===")

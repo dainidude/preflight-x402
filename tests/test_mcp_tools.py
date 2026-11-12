@@ -57,7 +57,7 @@ SIM_REPORT: dict[str, Any] = {
             "reference": None,
         }
     ],
-    "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "from_address": "0x000000000000000000000000000000000000dEaD",
     "value_wei": "0",
     "reverted": True,
@@ -115,18 +115,22 @@ async def test_preflight_check_lists_as_tool(monkeypatch: pytest.MonkeyPatch) ->
 
 async def test_preflight_sim_tool_returns_report(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_sim(
-        to: str, data: str | None = None, value_wei: str | None = None
+        to: str,
+        data: str | None = None,
+        value_wei: str | None = None,
+        mode: str = "quick",
     ) -> dict[str, Any]:
         assert to == SIM_REPORT["to"]
         assert data == "0xdeadbeef"
         assert value_wei == "0"
+        assert mode == "deep"
         return SIM_REPORT
 
     monkeypatch.setattr(mcp_server, "simulate_transaction", fake_sim)
     server = create_server()
     result = await server.call_tool(
         "preflight_sim",
-        {"to": SIM_REPORT["to"], "data": "0xdeadbeef", "value_wei": "0"},
+        {"to": SIM_REPORT["to"], "data": "0xdeadbeef", "value_wei": "0", "mode": "deep"},
     )
     data = json.loads(await _text(result))
     assert data["reverted"] is True
@@ -136,7 +140,10 @@ async def test_preflight_sim_tool_returns_report(monkeypatch: pytest.MonkeyPatch
 
 async def test_preflight_sim_lists_as_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_sim(
-        to: str, data: str | None = None, value_wei: str | None = None
+        to: str,
+        data: str | None = None,
+        value_wei: str | None = None,
+        mode: str = "quick",
     ) -> dict[str, Any]:
         return SIM_REPORT
 
@@ -232,6 +239,35 @@ async def test_simulate_transaction_sends_dev_header_and_payload(
     assert fake.last_json == {"to": SIM_REPORT["to"], "data": "0xdeadbeef", "value_wei": "0"}
 
 
+async def test_simulate_transaction_deep_routes_to_sim_deep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deep_report = dict(SIM_REPORT)
+    deep_report["gas_used"] = "51234"
+    deep_report["balance_delta_wei"] = "-1000000000000000"
+    deep_report["internal_calls"] = [
+        "0x833589…cf7e → transfer(address,uint256) 0xa9059cbb",
+        "0x833589…cf7e → revert ERC20: transfer amount exceeds balance",
+    ]
+    deep_report["simulator"] = "anvil-fork:v1"
+    fake = _FakeAsyncClient(_FakeResponse(200, deep_report))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    result = await mcp_server.simulate_transaction(SIM_REPORT["to"], mode="deep")
+    assert fake.last_url.endswith("/v1/sim/deep")
+    assert fake.last_json == {"to": SIM_REPORT["to"]}
+    assert result["balance_delta_wei"] == "-1000000000000000"
+    assert len(result["internal_calls"]) == 2
+
+
+async def test_simulate_transaction_rejects_unknown_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(mcp_server.ToolError, match="quick.*deep"):
+        await mcp_server.simulate_transaction(SIM_REPORT["to"], mode="turbo")
+
+
 async def test_simulate_transaction_402_raises_actionable_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -243,6 +279,19 @@ async def test_simulate_transaction_402_raises_actionable_tool_error(
         await mcp_server.simulate_transaction(SIM_REPORT["to"])
     assert "$0.05" in str(excinfo.value)
     assert "--route sim" in str(excinfo.value)
+
+
+async def test_simulate_transaction_deep_402_names_deep_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(402, {"error": "Payment required"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    with pytest.raises(mcp_server.ToolError) as excinfo:
+        await mcp_server.simulate_transaction(SIM_REPORT["to"], mode="deep")
+    assert "$0.25" in str(excinfo.value)
+    assert "--route sim-deep" in str(excinfo.value)
 
 
 async def test_simulate_transaction_validates_report(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -278,6 +327,13 @@ def test_x402_discovery_real_values() -> None:
     assert doc["pricing"]["POST /v1/scan"]["amount"] == "10000"
     assert doc["pricing"]["POST /v1/sim"]["price"] == "$0.05"
     assert doc["pricing"]["POST /v1/sim"]["amount"] == "50000"
+    assert doc["pricing"]["POST /v1/sim/deep"]["price"] == "$0.25"
+    assert doc["pricing"]["POST /v1/sim/deep"]["amount"] == "250000"
+    assert doc["pricing"]["POST /v1/sim/deep"]["network"] == "eip155:8453"
+    assert (
+        doc["pricing"]["POST /v1/sim/deep"]["asset"]
+        == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    )
     assert doc["pricing"]["POST /v1/scan/project"]["price"] == "$0.10"
     assert doc["pricing"]["POST /v1/scan/project"]["amount"] == "100000"
     assert doc["pricing"]["POST /v1/address-risk"]["price"] == "$0.005"
@@ -294,6 +350,7 @@ def test_x402_discovery_bazaar_extensions() -> None:
     for route in (
         "POST /v1/scan",
         "POST /v1/sim",
+        "POST /v1/sim/deep",
         "POST /v1/scan/project",
         "POST /v1/address-risk",
     ):
@@ -307,10 +364,25 @@ def test_x402_discovery_bazaar_extensions() -> None:
     assert bazaar["mcp"]["preflight_sim"]["info"]["input"]["toolName"] == "preflight_sim"
 
 
+def test_public_files_have_no_testnet_references() -> None:
+    root = Path(__file__).resolve().parent.parent / "public"
+    for name in (".well-known/x402.json", "llms.txt"):
+        text = (root / name).read_text(encoding="utf-8")
+        for needle in ("0x036CbD", "84532", "base-sepolia", "Sepolia", "testnet"):
+            assert needle not in text, f"{name} still references {needle}"
+
+
 def test_llms_txt_documents_new_surface() -> None:
     root = Path(__file__).resolve().parent.parent / "public"
     text = (root / "llms.txt").read_text(encoding="utf-8")
     assert "/v1/sim" in text
+    assert "/v1/sim/deep" in text
+    assert "$0.25" in text
+    assert "anvil" in text
+    assert "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" in text
+    assert "0x036CbD" not in text
+    assert "84532" not in text
+    assert "base-sepolia" not in text
     assert "/metrics" in text
     assert "PAYMENT-SIGNATURE" in text
     assert "PAYMENT-RESPONSE" in text

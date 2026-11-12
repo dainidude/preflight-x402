@@ -255,9 +255,51 @@ def parse_payment_header(header: str) -> PaymentPayload | PaymentPayloadV1:
 # ---------------------------------------------------------------------------
 
 class UsageTracker:
+    """Usage counters. Free-tier day counts persist to STATE_DIR when set
+    (rate windows are ephemeral by design)."""
+
     def __init__(self) -> None:
         self._free_day: dict[str, tuple[str, int]] = {}
         self._window: dict[str, deque[float]] = defaultdict(deque)
+        self._last_flush = 0.0
+        self._usage_file = None
+        import os
+
+        d = os.getenv("STATE_DIR")
+        if d:
+            from pathlib import Path
+
+            self._usage_file = Path(d) / "usage.json"
+            self._restore_usage()
+
+    def _restore_usage(self) -> None:
+        import json
+
+        if not self._usage_file or not self._usage_file.exists():
+            return
+        try:
+            data = json.loads(self._usage_file.read_text())
+            self._free_day = {k: tuple(v) for k, v in data.get("free", {}).items()}
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    def _maybe_flush(self, force: bool = False) -> None:
+        import json
+        import time
+
+        if not self._usage_file:
+            return
+        if not force and time.monotonic() - self._last_flush < 2.0:
+            return
+        self._last_flush = time.monotonic()
+        try:
+            tmp = self._usage_file.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"free": {k: list(v) for k, v in self._free_day.items()}})
+            )
+            tmp.replace(self._usage_file)
+        except OSError:
+            pass
 
     @staticmethod
     def fingerprint(request: Request) -> str:
@@ -283,6 +325,7 @@ class UsageTracker:
         if used >= FREE_TIER_DAILY:
             return False
         self._free_day[ident] = (today, used + 1)
+        self._maybe_flush()
         return True
 
     def allow_rate(self, ident: str) -> bool:
@@ -412,15 +455,18 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
     response = await call_next(request)
 
     try:
-        settled = await server.settle_payment(payload, requirements[0])
-        if not settled.success:
-            # Facilitator settles fail intermittently (hiccups, pending windows).
-            # Retrying is safe: EIP-3009 authorizations are single-use, so a
-            # broadcast that actually landed cannot be replayed — this retry
-            # only rescues settles that never broadcast.
-            import asyncio as _asyncio
+        # Settle-resilience v2: 3 attempts (1s/3s backoff). Retrying is safe:
+        # EIP-3009 authorizations are single-use, so a broadcast that actually
+        # landed cannot be replayed — retries only rescue settles that never
+        # broadcast. Final failure lands in the dead-letter journal for
+        # scripts/settle_repair.py.
+        import asyncio as _asyncio
 
-            await _asyncio.sleep(2.0)
+        settled = await server.settle_payment(payload, requirements[0])
+        for delay in (1.0, 3.0):
+            if settled.success:
+                break
+            await _asyncio.sleep(delay)
             settled = await server.settle_payment(payload, requirements[0])
         response.headers[PAYMENT_RESPONSE_HEADER] = safe_base64_encode(
             settled.model_dump_json()
@@ -436,10 +482,54 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
             from preflight.notify.discord import notify_sale
 
             await notify_sale(route, amount, settled.payer, settled.transaction)
+        else:
+            _dead_letter(route, payload, requirements[0], settled)
     except Exception as exc:  # served but settle failed — surfaced in header only
         response.headers["X-Preflight-Settle-Error"] = str(exc)[:200]
+        try:
+            _dead_letter(route, payload, requirements[0], error=str(exc)[:200])
+        except Exception:
+            pass
 
     return response
+
+
+def _dead_letter(
+    route: str,
+    payload: Any,
+    requirement: PaymentRequirements,
+    settled: Any = None,
+    error: str | None = None,
+) -> None:
+    """Journal an unsettled payment for replay (STATE_DIR required)."""
+    import time as _time
+
+    from preflight.config import config as _cfg
+
+    cfg = _cfg()
+    if not cfg.state_dir:
+        return
+    from preflight.api.state import get_settle_dead_letter_storage
+
+    storage = get_settle_dead_letter_storage()
+    if storage is None:
+        from preflight.api.state import configure as _configure
+
+        _configure(cfg.state_dir)
+        storage = get_settle_dead_letter_storage()
+    storage.append_dead_letter(
+        {
+            "ts": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "route": route,
+            "amount_base_units": _route_amount(route),
+            "payer": getattr(settled, "payer", None),
+            "transaction": getattr(settled, "transaction", None),
+            "error": error
+            or (None if settled is None else getattr(settled, "error_reason", None)),
+            "requirements": requirement.model_dump(mode="json", by_alias=True),
+            "payload": payload.model_dump(mode="json", by_alias=True) if hasattr(payload, "model_dump") else payload,
+        }
+    )
 
 
 def validate_pay_to_address() -> bool:

@@ -3,7 +3,7 @@
   "resource": "https://preflight--preflight-api-api.us-east.modal.run",
   "service": "Preflight",
   "service_name": "Preflight",
-  "description": "Pay-per-call smart-contract & transaction pre-flight security API. Submit Solidity source or a transaction for simulation and receive a severity-scored, EIP-712-attested verdict, paid per call via x402 (HTTP 402 + USDC on Base Sepolia testnet).",
+  "description": "Pay-per-call smart-contract & transaction pre-flight security API. Submit Solidity source or a transaction for simulation and receive a severity-scored, EIP-712-attested verdict, paid per call via x402 (HTTP 402 + USDC on Base mainnet).",
   "version": "0.1.0",
   "protocol": "x402",
   "tags": [
@@ -49,6 +49,14 @@
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
     },
+    "POST /v1/sim/deep": {
+      "price": "$0.25",
+      "amount": "250000",
+      "description": "Deep transaction simulation (anvil fork: gas, balance deltas, internal calls)",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "scheme": "exact"
+    },
     "POST /v1/address-risk": {
       "price": "$0.005",
       "amount": "5000",
@@ -65,6 +73,7 @@
     "POST /v1/scan": "single-file security scan ($0.01)",
     "POST /v1/scan/project": "multi-file project security scan ($0.10)",
     "POST /v1/sim": "transaction pre-flight simulation ($0.05)",
+    "POST /v1/sim/deep": "deep transaction simulation (anvil fork) ($0.25)",
     "POST /v1/address-risk": "address risk heuristics ($0.005)",
     "GET /llms.txt": "LLM-facing service description",
     "GET /.well-known/x402.json": "this file"
@@ -342,7 +351,137 @@
               "simulator": "rpc-ethcall:v1",
               "attestation": null,
               "notes": [
-                "demo: caller has no test USDC, so transfer() reverts"
+                "demo: caller has no USDC, so transfer() reverts"
+              ]
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 42,
+                      "maxLength": 42
+                    },
+                    "data": {
+                      "type": "string",
+                      "pattern": "^0x[0-9a-fA-F]*$"
+                    },
+                    "value_wei": {
+                      "type": "string"
+                    },
+                    "from_address": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "to"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "POST /v1/sim/deep": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "data": "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+              "value_wei": "0"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "block",
+              "score": 85.0,
+              "findings": [
+                {
+                  "id": "sim:revert",
+                  "title": "Simulated call reverts",
+                  "severity": "high",
+                  "confidence": 1.0,
+                  "description": "ERC-20 transfer reverted: transfer amount exceeds balance",
+                  "snippet": null,
+                  "detector": "heuristic:simulation",
+                  "reference": null
+                }
+              ],
+              "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "from_address": "0x000000000000000000000000000000000000dEaD",
+              "value_wei": "0",
+              "reverted": true,
+              "revert_reason": "ERC20: transfer amount exceeds balance",
+              "gas_used": "51234",
+              "simulated_at": "2026-11-12T00:00:00Z",
+              "simulator": "anvil-fork:v1",
+              "attestation": null,
+              "notes": [
+                "demo: caller has no USDC, so transfer() reverts"
+              ],
+              "balance_delta_wei": "-1000000000000000",
+              "internal_calls": [
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \u2192 transfer(address,uint256) 0xa9059cbb",
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \u2192 revert ERC20: transfer amount exceeds balance"
               ]
             }
           }
@@ -593,7 +732,7 @@
             "input": {
               "type": "mcp",
               "toolName": "preflight_sim",
-              "description": "Simulate a transaction against a contract and return revert/gas/risk findings ($0.05).",
+              "description": "Simulate a transaction and return revert/gas/balance-delta/internal-call findings (quick $0.05, deep anvil fork $0.25).",
               "transport": "streamable-http",
               "inputSchema": {
                 "properties": {
@@ -605,6 +744,13 @@
                   },
                   "value_wei": {
                     "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "quick",
+                      "deep"
+                    ]
                   }
                 },
                 "required": [
@@ -614,7 +760,8 @@
               "example": {
                 "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                 "data": "0xa9059cbb...",
-                "value_wei": "0"
+                "value_wei": "0",
+                "mode": "deep"
               }
             }
           },
@@ -633,7 +780,16 @@
                     "type": "string"
                   },
                   "inputSchema": {
-                    "type": "object"
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "quick",
+                          "deep"
+                        ]
+                      }
+                    }
                   },
                   "description": {
                     "type": "string"

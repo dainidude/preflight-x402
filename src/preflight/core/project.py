@@ -15,9 +15,12 @@ from preflight.types import Finding, ScanReport
 from .pipeline import _get_solc_binary_path, _parse_slither_json
 
 
-def _run_slither_on_project(main_file: str, solc_version: str, tmpdir: Path) -> list[Finding]:
+def _run_slither_on_project(
+    main_file: str, solc_version: str, tmpdir: Path
+) -> tuple[list[Finding], str | None]:
     """Run Slither on a multi-file project in a temp directory."""
     findings: list[Finding] = []
+    note: str | None = None
 
     try:
         solc_binary = _get_solc_binary_path(solc_version)
@@ -65,14 +68,16 @@ def _run_slither_on_project(main_file: str, solc_version: str, tmpdir: Path) -> 
             except json.JSONDecodeError:
                 pass
 
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    except subprocess.TimeoutExpired:
+        note = "Slither timed out after 120s; running custom detectors only"
+    except FileNotFoundError:
+        note = "Slither not available; running custom detectors only"
     except ValueError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        note = f"Slither failed: {exc}; running custom detectors only"
 
-    return findings
+    return findings, note
 
 
 async def run_analysis_project(
@@ -117,16 +122,25 @@ async def run_analysis_project(
             file_path.write_text(fsource, encoding="utf-8")
 
         # Run slither on the main file with all project files available
-        slither_findings = _run_slither_on_project(main_file, solc_version, tmpdir_path)
+        slither_findings, slither_note = _run_slither_on_project(
+            main_file, solc_version, tmpdir_path
+        )
 
         # Run custom detectors on combined source (for cross-file patterns)
-        combined_source = "\n\n".join(f"// File: {fname}\n{fsource}" for fname, fsource in sorted(files.items()))
-        custom_findings = run_all_custom_detectors(DetectorContext(
-            source=combined_source,
-            lines=combined_source.splitlines(),
-            contract_name=contract_name,
-            solc_version=solc_version,
-        ))
+        combined_source = "\n\n".join(
+            f"// File: {fname}\n{fsource}"
+            for fname, fsource in sorted(files.items())
+        )
+        custom_findings = run_all_custom_detectors(
+            DetectorContext(
+                source=combined_source,
+                lines=combined_source.splitlines(),
+                contract_name=contract_name,
+                solc_version=solc_version,
+            )
+        )
+
+        notes = [slither_note] if slither_note else []
 
         # Build report
         report = build_scan_report(
@@ -135,6 +149,7 @@ async def run_analysis_project(
             custom_findings=custom_findings,
             contract_name=contract_name,
             solc_version=solc_version,
+            notes=notes,
         )
 
     return report

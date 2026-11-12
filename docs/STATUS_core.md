@@ -92,3 +92,56 @@ uv run pytest tests/ -m "not network" -v
 
 ## Cross-area requests
 - None. The simulation module consumes the `SimRequest`/`SimReport` contract from `src/preflight/types.py` and leaves attestation/API wiring to the arbiter/omp areas.
+
+---
+
+## v2 deep sim
+
+### What was built
+
+#### `src/preflight/core/simulation.py`
+- Split into quick (`rpc-ethcall:v1`) and deep (`anvil-fork:v1`) modes driven by `req.mode`.
+- Deep mode spawns a local anvil fork against `https://mainnet.base.org` (or `RPC_URL`) per request:
+  - funds + impersonates the simulated sender with `anvil_setBalance` / `anvil_impersonateAccount`
+  - runs `eth_estimateGas` and mines the tx via `eth_sendTransaction` for real `gas_used`
+  - records `balance_delta_wei` (sender balance after − before)
+  - decodes reverts (`Error(string)`, `Panic(uint256)`) via `eth_call`
+  - traces internal calls with `debug_traceTransaction` + `callTracer`, formatted as `to-short → 0xsel4(...)` and capped at 10
+- If anvil is missing or fails to start, deep mode falls back to quick results and adds a `sim:deep-unavailable` low finding + note.
+- Anvil binary discovery checks `~/.config/.foundry/bin` and `~/.foundry/bin` in addition to `PATH`.
+- Process lifecycle is wrapped in try/finally with terminate/kill and a 90s overall timeout.
+
+#### Core bugfix sweep (`src/preflight/core/`)
+- `detectors/custom.py`:
+  - Added `interface_ranges` to `DetectorContext` and skip interface blocks / abstract function declarations / comment lines in all detectors, eliminating false positives on interface-only and abstract sources.
+  - `run_all_custom_detectors` accepts a `str` or `DetectorContext` and auto-computes ranges when missing.
+- `pipeline.py` + `project.py`:
+  - `_run_slither_on_source` / `_run_slither_on_project` now return a status note on timeout / missing slither and degrade to custom-detectors-only instead of silently returning empty findings.
+  - Added Slither `critical` → `critical` severity mapping.
+- `scoring.py`: no bug found; added regression tests proving high findings always produce a positive score and high scores exceed medium scores.
+
+#### Tests
+- `tests/test_simulation.py` — added deep-mode offline fallback test and a network deep test against Base mainnet USDC.
+- `tests/test_core_detector_edgecases.py` — interface-only, abstract virtual functions, empty contract, multiple pragmas, unbounded `>=0.8.0` pragma.
+- `tests/test_core_scoring.py` — verdict rules and score monotonicity/extremes.
+
+### Foundry
+- Installed via `curl -L https://foundry.paradigm.xyz | bash` + `foundryup`.
+- Verified: `anvil Version: 1.9.0`.
+
+### Test results
+```bash
+uv run pytest tests/ -m "not network" -q
+```
+- **124 passed, 5 deselected (network), 1 warning**
+
+Network-marked deep test also passes (Base mainnet fork via anvil).
+
+### Bugs fixed
+- Detector false positives on interface-only / abstract / comment-only sources.
+- Slither timeout/missing binary now surfaces a note and degrades gracefully.
+- Missing `critical` severity mapping from Slither.
+- Anvil spawn args corrected (removed invalid `--fork-block-number latest` and `--block-time 0`).
+
+### Cross-area requests
+- None.

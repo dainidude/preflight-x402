@@ -145,12 +145,14 @@ def _get_solc_binary_path(version: str) -> str:
     return version
 
 
-def _run_slither_on_source(source: str, solc_version: str) -> list[Finding]:
-    """Run Slither on source code via subprocess and return findings.
+def _run_slither_on_source(source: str, solc_version: str) -> tuple[list[Finding], str | None]:
+    """Run Slither on source code via subprocess and return findings + status note.
 
-    Uses temporary file approach for robustness.
+    Uses temporary file approach for robustness. A note is returned when Slither
+    is missing or times out so callers can degrade gracefully.
     """
     findings: list[Finding] = []
+    note: str | None = None
 
     with tempfile.TemporaryDirectory() as tmpdir:
         source_file = Path(tmpdir) / "contract.sol"
@@ -202,17 +204,17 @@ def _run_slither_on_source(source: str, solc_version: str) -> list[Finding]:
                 except json.JSONDecodeError:
                     pass
 
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            # Slither not available or timed out
-            pass
+        except subprocess.TimeoutExpired:
+            note = "Slither timed out after 120s; running custom detectors only"
+        except FileNotFoundError:
+            note = "Slither not available; running custom detectors only"
         except ValueError:
             # Re-raise ValueError for invalid solidity
             raise
-        except Exception:
-            # Other unexpected errors - log and continue
-            pass
+        except Exception as exc:
+            note = f"Slither failed: {exc}; running custom detectors only"
 
-    return findings
+    return findings, note
 
 
 def _parse_slither_json(data: dict[str, Any], source: str) -> list[Finding]:
@@ -260,6 +262,7 @@ def _parse_slither_json(data: dict[str, Any], source: str) -> list[Finding]:
 def _map_slither_severity(sev: str) -> Severity:
     """Map Slither severity to our severity enum."""
     mapping: dict[str, Severity] = {
+        "critical": "critical",
         "high": "high",
         "medium": "medium",
         "low": "low",
@@ -320,10 +323,12 @@ async def run_analysis(
         solc_version = _ensure_solc_installed(solc_version)
 
     # Run Slither analysis
-    slither_findings = _run_slither_on_source(source, solc_version)
+    slither_findings, slither_note = _run_slither_on_source(source, solc_version)
 
     # Run custom detectors
     custom_findings = _run_custom_detectors(source, contract_name, solc_version)
+
+    notes = [slither_note] if slither_note else []
 
     # Build final report
     report = build_scan_report(
@@ -332,6 +337,7 @@ async def run_analysis(
         custom_findings=custom_findings,
         contract_name=contract_name,
         solc_version=solc_version,
+        notes=notes,
     )
 
     return report

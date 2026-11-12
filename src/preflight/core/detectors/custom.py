@@ -7,7 +7,7 @@ Text/AST heuristics are fine for v1.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from preflight.types import Finding, Severity
@@ -20,6 +20,52 @@ class DetectorContext:
     lines: list[str]
     contract_name: str | None
     solc_version: str | None
+    interface_ranges: list[tuple[int, int]] = field(default_factory=list)
+
+
+def _find_interface_ranges(source: str) -> list[tuple[int, int]]:
+    """Return line-index ranges (start inclusive, end exclusive) of interface blocks."""
+    ranges: list[tuple[int, int]] = []
+    in_interface = False
+    depth = 0
+    start = 0
+    for i, line in enumerate(source.splitlines()):
+        stripped = line.strip()
+        if not in_interface:
+            if re.search(r"\binterface\b", stripped):
+                in_interface = True
+                start = i
+                depth = stripped.count("{") - stripped.count("}")
+                if depth <= 0 and "{" in stripped:
+                    ranges.append((start, i + 1))
+                    in_interface = False
+        else:
+            depth += stripped.count("{") - stripped.count("}")
+            if depth <= 0:
+                ranges.append((start, i + 1))
+                in_interface = False
+    return ranges
+
+
+def _inside_interface(ctx: DetectorContext, line_no: int) -> bool:
+    """Check whether a line index sits inside an interface block."""
+    return any(start <= line_no < end for start, end in ctx.interface_ranges)
+
+
+def _is_function_declaration(line: str) -> bool:
+    """True for function signatures without a body (interface/abstract/virtual)."""
+    stripped = line.strip()
+    return (
+        "function" in stripped
+        and stripped.endswith(";")
+        and "{" not in stripped
+    )
+
+
+def _is_comment_line(line: str) -> bool:
+    """True for pure comment lines."""
+    stripped = line.strip()
+    return stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*")
 
 
 def _make_finding(
@@ -75,6 +121,8 @@ def detect_fee_on_transfer(ctx: DetectorContext) -> list[Finding]:
         matches = list(re.finditer(pattern, source_lower))
         for m in matches:
             line_no = ctx.source[: m.start()].count("\n")
+            if _inside_interface(ctx, line_no) or _is_comment_line(ctx.lines[line_no]):
+                continue
             snippet = _extract_snippet(ctx.lines, line_no)
             findings.append(
                 _make_finding(
@@ -96,6 +144,8 @@ def detect_fee_on_transfer(ctx: DetectorContext) -> list[Finding]:
     )
     for m in transfer_adjustment:
         line_no = ctx.source[: m.start()].count("\n")
+        if _inside_interface(ctx, line_no) or _is_comment_line(ctx.lines[line_no]):
+            continue
         snippet = _extract_snippet(ctx.lines, line_no)
         findings.append(
             _make_finding(
@@ -126,6 +176,8 @@ def detect_unguarded_initializer(ctx: DetectorContext) -> list[Finding]:
 
     # Find initializer functions - check for function with initializer modifier
     for i, line in enumerate(lines):
+        if _inside_interface(ctx, i) or _is_function_declaration(line):
+            continue
         line_lower = line.lower()
         # Check for function with initializer modifier on same line or next few lines
         if "function" in line_lower and ("initializer" in line_lower or "reinitializer" in line_lower):
@@ -163,6 +215,8 @@ def detect_unguarded_initializer(ctx: DetectorContext) -> list[Finding]:
     if "uups" in ctx.source.lower() or "upgradeable" in ctx.source.lower():
         # Look for initialize() without initializer modifier
         for i, line in enumerate(lines):
+            if _inside_interface(ctx, i) or _is_function_declaration(line):
+                continue
             line_lower = line.lower()
             if "function initialize" in line_lower and "initializer" not in line_lower and "reinitializer" not in line_lower:
                 # Check if it has any access control
@@ -205,6 +259,12 @@ def detect_oracle_freshness(ctx: DetectorContext) -> list[Finding]:
 
     # Find latestRoundData calls
     for i, line in enumerate(lines):
+        if (
+            _inside_interface(ctx, i)
+            or _is_function_declaration(line)
+            or _is_comment_line(line)
+        ):
+            continue
         if "latestrounddata" in line.lower():
             # Check surrounding context for updatedAt or timestamp check
             context_start = max(0, i - 5)
@@ -235,6 +295,8 @@ def detect_oracle_freshness(ctx: DetectorContext) -> list[Finding]:
     # Look for aggregatorV3Interface usage without validation
     if "aggregatorv3interface" in source_lower:
         for i, line in enumerate(lines):
+            if _inside_interface(ctx, i) or _is_comment_line(line):
+                continue
             if "aggregatorv3interface" in line.lower():
                 snippet = _extract_snippet(lines, i)
                 findings.append(
@@ -284,6 +346,8 @@ def detect_missing_zero_address_checks(ctx: DetectorContext) -> list[Finding]:
 
     # Find constructors and initializers
     for i, line in enumerate(lines):
+        if _inside_interface(ctx, i) or _is_comment_line(line):
+            continue
         line_lower = line.lower()
         is_constructor = "constructor" in line_lower
         is_initializer = "initializer" in line_lower and "function" in line_lower
@@ -359,6 +423,12 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
     if has_pausable:
         # Check if pause is owner-only or has broad control
         for i, line in enumerate(lines):
+            if (
+                _inside_interface(ctx, i)
+                or _is_function_declaration(line)
+                or _is_comment_line(line)
+            ):
+                continue
             if "function pause" in line.lower() or "function unpause" in line.lower():
                 context = " ".join(lines[max(0, i - 2) : min(len(lines), i + 5)]).lower()
                 if "onlyowner" in context or "onlyrole" in context:
@@ -388,7 +458,9 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
         matches = list(re.finditer(pattern, source_lower))
         for m in matches:
             line_no = ctx.source[: m.start()].count("\n")
-            snippet = _extract_snippet(lines, line_no)
+            if _inside_interface(ctx, line_no) or _is_comment_line(ctx.lines[line_no]):
+                continue
+            snippet = _extract_snippet(ctx.lines, line_no)
             findings.append(
                 _make_finding(
                     detector_name="honeypot",
@@ -405,6 +477,12 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
 
     # Check for _beforeTokenTransfer with owner logic
     for i, line in enumerate(lines):
+        if (
+            _inside_interface(ctx, i)
+            or _is_function_declaration(line)
+            or _is_comment_line(line)
+        ):
+            continue
         if "_beforetokentransfer" in line.lower():
             context = " ".join(lines[i : min(len(lines), i + 20)]).lower()
             if "owner" in context or "onlyowner" in context or "blacklist" in context:
@@ -425,8 +503,21 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
     return findings
 
 
-def run_all_custom_detectors(ctx: DetectorContext) -> list[Finding]:
+def run_all_custom_detectors(source: str | DetectorContext) -> list[Finding]:
     """Run all custom detectors and return combined findings."""
+    if isinstance(source, str):
+        ctx = DetectorContext(
+            source=source,
+            lines=source.splitlines(),
+            contract_name=None,
+            solc_version=None,
+            interface_ranges=_find_interface_ranges(source),
+        )
+    else:
+        ctx = source
+        if not ctx.interface_ranges:
+            ctx.interface_ranges = _find_interface_ranges(ctx.source)
+
     all_findings = []
     all_findings.extend(detect_fee_on_transfer(ctx))
     all_findings.extend(detect_unguarded_initializer(ctx))

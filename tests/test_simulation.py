@@ -215,14 +215,46 @@ contract BlacklistToken {
         assert report.from_address == custom
 
 
+class TestDeepSimulation:
+    @pytest.mark.asyncio
+    async def test_deep_falls_back_when_anvil_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(simulation_mod, "_anvil_path", lambda: None)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            data="0x1234",
+            mode="deep",
+        )
+        report = await run_simulation(req)
+        assert report.simulator == "anvil-fork:v1"
+        assert any(f.id == "sim:deep-unavailable" for f in report.findings)
+        assert "fell back to quick mode" in " ".join(report.notes)
+
+
 class TestRunSimulationNetwork:
     @pytest.mark.network
     @pytest.mark.asyncio
     async def test_live_erc20_call(self):
         req = SimRequest(
-            to="0x036CbD53842c5426634e7929541eC2318f3dCF7e",  # Base Sepolia USDC
+            to="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # Base mainnet USDC
             data="0x70a082310000000000000000000000000000000000000000000000000000000000000000",
         )
         report = await run_simulation(req)
         assert report.reverted is False
         assert report.simulator == "rpc-ethcall:v1"
+
+    @pytest.mark.network
+    @pytest.mark.asyncio
+    async def test_live_deep_usdc_balance_call(self):
+        req = SimRequest(
+            to="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # Base mainnet USDC
+            data="0x70a082310000000000000000000000000000000000000000000000000000000000000000",
+            mode="deep",
+        )
+        report = await run_simulation(req)
+        assert report.simulator == "anvil-fork:v1"
+        assert report.reverted is False
+        assert report.gas_used is not None
+        assert report.balance_delta_wei is not None
+        assert int(report.balance_delta_wei) <= 0  # sender paid gas

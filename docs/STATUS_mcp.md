@@ -148,3 +148,61 @@ uv run pytest tests/test_paid_flow.py -q -m network            # spends $0.01
    router mounted for the paid-flow gate to pass end-to-end.
 3. For the paid-flow gate the API must run with `DEV_MODE=0` and
    `FREE_TIER=0`; otherwise the test skips because no settlement occurs.
+
+## v2 surface (deep sim, mainnet polish, batch design)
+
+### What changed
+
+- `src/preflight/mcp/server.py` — `preflight_sim` gains `mode: "quick"|"deep"`
+  (default `quick`). `deep` routes to `POST /v1/sim/deep` ($0.25); 402
+  `ToolError`s name the correct price and demo route (`--route sim-deep`).
+  `simulate_transaction()` validates mode and returns the full `SimReport`.
+  Tool descriptions now state both prices and Base mainnet.
+- `client/pay_client.py` — `--route sim-deep` (and `--route sim --deep`) posts
+  `/v1/sim/deep`; sim output prints `gas_used`, `balance_delta_wei`, and
+  `internal_calls`. Mainnet reality: USDC
+  `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, RPC
+  `https://mainnet.base.org`, and zero balance prints the Base mainnet funding
+  link instead of faucet text. `--dev` behavior unchanged.
+- `public/llms.txt` — `/v1/sim/deep` row ($0.25, anvil fork), quick vs deep
+  description, deep `SimReport` fields, curl example, MCP `mode` docs; all
+  testnet asset/network references removed.
+- `public/.well-known/x402.json` — `POST /v1/sim/deep` pricing
+  (`$0.25` / `250000` / `eip155:8453` / mainnet USDC), endpoint entry, Bazaar
+  discovery block with anvil output example, and `mode` input on the
+  `preflight_sim` MCP discovery. All testnet references removed.
+- `tests/test_mcp_tools.py` — deep routing test (asserts `/v1/sim/deep`),
+  deep 402 pricing, invalid-mode rejection, sim/deep discovery assertions, and
+  a public-files no-testnet sweep test.
+- `tests/test_pay_client.py` — `sim-deep` route/payload shape test, deep route
+  in the mocked paid-flow matrix, mainnet constants/RPC.
+- `docs/BATCH_SETTLEMENT.md` — one-page design (no implementation).
+
+### How to run
+
+```bash
+uv run pytest tests/test_mcp_tools.py tests/test_pay_client.py -q -m "not network"
+uv run python client/pay_client.py --route sim-deep
+uv run python client/pay_client.py --route sim --deep
+```
+
+### Test results
+
+- Full offline suite: **104 passed, 4 deselected**
+  (`uv run pytest tests/ -m "not network"`).
+- Crush files: **39 passed, 1 deselected**.
+
+### Remaining testnet references
+
+- None in `public/`, `client/`, or `src/preflight/mcp/`. The only remaining
+  literals are the intentional guard list inside
+  `test_public_files_have_no_testnet_references`.
+
+### Cross-area notes
+
+- `POST /v1/sim/deep` is wired in the API and priced, but core simulation still
+  raises `NotImplementedError` for deep mode, so the endpoint currently returns
+  503. The MCP/client surface is ready for the anvil-fork implementation.
+- Batch-settlement recommendation: **no-go for v2 launch**; revisit as an
+  opt-in high-frequency scheme once facilitator support, volume, and durable
+  channel storage justify escrow/refund operations.
