@@ -66,6 +66,73 @@ ROUTE_PRICES: dict[str, tuple[str, str]] = {
 FREE_TIER_DAILY = 10
 RATE_LIMIT_PER_MIN = 10
 
+# Bazaar discovery declarations per route (CDP Bazaar: Python is opt-in —
+# every discoverable route must declare its metadata explicitly). Schema +
+# example let an agent construct a valid paid call without guessing.
+from x402.extensions.bazaar import OutputConfig, declare_discovery_extension  # noqa: E402
+
+ROUTE_BAZAAR: dict[str, dict] = {
+    "POST /v1/scan": declare_discovery_extension(
+        input={
+            "source": "contract Vault { mapping(address => uint256) balances; }",
+            "contract_name": "Vault",
+        },
+        input_schema={
+            "properties": {
+                "source": {"type": "string", "description": "Solidity source code of the contract to scan"},
+                "contract_name": {"type": "string", "description": "Target contract name when the source has several"},
+                "solc_version": {"type": "string", "description": "e.g. 0.8.20; auto-detected from pragma when omitted"},
+            },
+            "required": ["source"],
+        },
+        body_type="json",
+        output=OutputConfig(
+            example={
+                "verdict": "block",
+                "score": 24.7,
+                "findings": [{"id": "reentrancy-eth", "severity": "high", "title": "Reentrancy"}],
+            }
+        ),
+    ),
+    "POST /v1/sim": declare_discovery_extension(
+        input={"to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "data": "0x", "value_wei": "0"},
+        input_schema={
+            "properties": {
+                "to": {"type": "string", "description": "Target contract address"},
+                "data": {"type": "string", "description": "0x-hex calldata (omit for plain value transfer)"},
+                "value_wei": {"type": "string", "description": "Wei value, decimal string"},
+            },
+            "required": ["to"],
+        },
+        body_type="json",
+        output=OutputConfig(example={"verdict": "review", "reverted": True, "revert_reason": "…"}),
+    ),
+    "POST /v1/scan/project": declare_discovery_extension(
+        input={"files": {"Vault.sol": "contract Vault {}"}},
+        input_schema={
+            "properties": {
+                "files": {
+                    "type": "object",
+                    "description": "Mapping of file name to Solidity source",
+                },
+                "contract_name": {"type": "string"},
+            },
+            "required": ["files"],
+        },
+        body_type="json",
+        output=OutputConfig(example={"verdict": "looks_ok", "score": 0.0, "findings": []}),
+    ),
+    "POST /v1/address-risk": declare_discovery_extension(
+        input={"address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"},
+        input_schema={
+            "properties": {"address": {"type": "string", "description": "EVM address to screen"}},
+            "required": ["address"],
+        },
+        body_type="json",
+        output=OutputConfig(example={"verdict": "looks_ok", "findings": []}),
+    ),
+}
+
 
 def price_list() -> dict[str, str]:
     return {route: price for route, (price, _) in ROUTE_PRICES.items()}
@@ -116,7 +183,12 @@ def build_requirements(route: str, cfg: Config | None = None) -> list[PaymentReq
             max_timeout_seconds=60,
             extra={"description": description},
         )
-        _requirements_cache[route] = server.build_payment_requirements(rc)
+        requirements = server.build_payment_requirements(rc)
+        # Attach the Bazaar discovery declaration so the 402 advertises it
+        # (CDP Bazaar validation requires an extensions.bazaar block).
+        for req in requirements:
+            req.extensions = dict(ROUTE_BAZAAR.get(route) or {})
+        _requirements_cache[route] = requirements
     return _requirements_cache[route]
 
 
@@ -215,7 +287,10 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     ident = usage.fingerprint(request)
 
-    if cfg.free_tier and usage.consume_free(ident):
+    # Free tier is OPT-IN via explicit header so that x402 crawlers/validators
+    # (which never send it) always see the required 402 payment challenge.
+    free_trial = request.headers.get("x-preflight-free") == "trial"
+    if cfg.free_tier and free_trial and usage.consume_free(ident):
         if not usage.allow_rate(ident):
             from fastapi.responses import JSONResponse
 

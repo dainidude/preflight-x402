@@ -81,23 +81,35 @@ def test_free_tier_grants_then_exhausts(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("DEV_MODE", "0")
     monkeypatch.setenv("FREE_TIER", "1")
     Config.reload()
-    try:
-        monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
-        monkeypatch.setattr(app_mod, "_run_analysis", lambda s, cn=None, sv=None: ScanReport(
-            verdict="looks_ok", score=0.0, findings=[], contract_name=None,
-            solc_version="0.8.20", scanner_versions={"slither": "0.11.6"},
-            scanned_at="2026-11-10T00:00:00Z", source_sha256="b" * 64,
-        ))
-        pay_mod.usage = pay_mod.UsageTracker()
-        with TestClient(app) as c:
-            for i in range(10):
-                r = c.post("/v1/scan", json={"source": f"contract N{i} {{}}"})
-                assert r.status_code == 200, f"free call {i} failed"
-                assert r.headers.get("x-preflight-free-tier") == "granted"
-            r = c.post("/v1/scan", json={"source": "contract Eleventh {}"})
-            assert r.status_code == 402, "11th call should require payment"
-    finally:
-        pass  # monkeypatch restores env automatically
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
+    monkeypatch.setattr(app_mod, "_run_analysis", lambda s, cn=None, sv=None: ScanReport(
+        verdict="looks_ok", score=0.0, findings=[], contract_name=None,
+        solc_version="0.8.20", scanner_versions={"slither": "0.11.6"},
+        scanned_at="2026-11-10T00:00:00Z", source_sha256="b" * 64,
+    ))
+    pay_mod.usage = pay_mod.UsageTracker()
+    with TestClient(app) as c:
+        for i in range(10):
+            r = c.post("/v1/scan", json={"source": f"contract N{i} {{}}"},
+                       headers={"X-Preflight-Free": "trial"})
+            assert r.status_code == 200, f"free call {i} failed"
+            assert r.headers.get("x-preflight-free-tier") == "granted"
+        r = c.post("/v1/scan", json={"source": "contract Eleventh {}"},
+                   headers={"X-Preflight-Free": "trial"})
+        assert r.status_code == 402, "11th call should require payment"
+
+
+def test_no_header_means_immediate_402(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Crawlers/validators never send the trial header — they must see the 402."""
+    monkeypatch.setenv("DEV_MODE", "0")
+    monkeypatch.setenv("FREE_TIER", "1")
+    Config.reload()
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: [FakeRequirements()])
+    pay_mod.usage = pay_mod.UsageTracker()
+    with TestClient(app) as c:
+        r = c.post("/v1/scan", json={"source": "contract A {}"})
+        assert r.status_code == 402, "bare request must be paywalled (free tier is opt-in)"
+        assert r.headers.get("x-preflight-free-tier") is None
 
 
 def test_usage_tracker_rate_limit() -> None:

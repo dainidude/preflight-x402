@@ -17,6 +17,9 @@
 | POST | `/v1/scan/project` | $0.10 | x402 |
 | POST | `/v1/address-risk` | $0.005 | x402 |
 
+Free trial: send header `X-Preflight-Free: trial` to get your first 10
+scans/day free (opt-in; requests without the header are paywalled normally).
+
 `/v1/sim` is transaction pre-flight simulation: give a target `to`, optional
 0x-hex calldata `data`, and optional `value_wei`; get back a `SimReport` with
 `reverted`, `revert_reason`, `gas_used`, and severity-scored findings (a
