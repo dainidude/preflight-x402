@@ -53,6 +53,7 @@ FREE_ROUTES = {
     "GET /metrics",
     "GET /llms.txt",
     "GET /.well-known/x402.json",
+    "GET /.well-known/x402",
 }
 
 # route -> (price, description)

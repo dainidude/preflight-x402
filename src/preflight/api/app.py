@@ -125,6 +125,22 @@ async def x402_well_known() -> Response:
     return _serve_public(".well-known/x402.json")
 
 
+@app.get("/.well-known/x402")
+async def x402_fanout(request: Request) -> dict[str, Any]:
+    """x402scan compatibility fan-out (docs/DISCOVERY.md option B)."""
+    base = str(request.base_url).rstrip("/")
+    return {
+        "version": 1,
+        "resources": [
+            f"{base}/v1/scan",
+            f"{base}/v1/sim",
+            f"{base}/v1/scan/project",
+            f"{base}/v1/address-risk",
+        ],
+        "ownershipProofs": [config().pay_to_address] if config().pay_to_address else [],
+    }
+
+
 @app.post("/v1/scan")
 async def scan_source(request: ScanRequest, raw: Request) -> Response:
     """Scan Solidity source — $0.01 via x402."""
@@ -238,3 +254,49 @@ if __name__ == "__main__":
 
     validate_pay_to_address()
     uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("PREFLIGHT_PORT", "8000")))
+
+
+# ---------------------------------------------------------------------------
+# x402scan OpenAPI-first discovery (docs/DISCOVERY.md option A): enrich the
+# auto-generated /openapi.json with per-operation x-payment-info + a declared
+# 402 response, and top-level ownership proofs.
+# ---------------------------------------------------------------------------
+
+_PAID_PATHS: dict[str, str] = {  # path -> USD amount
+    "/v1/scan": "0.01",
+    "/v1/sim": "0.05",
+    "/v1/scan/project": "0.10",
+    "/v1/address-risk": "0.005",
+}
+
+
+def _openapi_with_x402() -> dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = _original_openapi()
+    pay_to = config().pay_to_address
+    if pay_to:
+        schema.setdefault("x-discovery", {})["ownershipProofs"] = [pay_to]
+
+    for path, methods in schema.get("paths", {}).items():
+        amount = _PAID_PATHS.get(path)
+        if not amount:
+            continue
+        for method, op in methods.items():
+            if method.lower() not in {"post", "get", "put", "patch", "delete"}:
+                continue
+            op["x-payment-info"] = {
+                "protocols": ["x402"],
+                "price": {"mode": "fixed", "currency": "USD", "amount": amount},
+            }
+            op.setdefault("responses", {})["402"] = {
+                "description": "x402 Payment Required (PAYMENT-REQUIRED header + accepts)",
+            }
+
+    app.openapi_schema = schema
+    return schema
+
+
+_original_openapi = app.openapi
+app.openapi = _openapi_with_x402  # type: ignore[method-assign]
