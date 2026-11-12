@@ -326,8 +326,22 @@ def parse_payment_required(headers: dict[str, str], body: bytes) -> PaymentRequi
 
     accepts = data if isinstance(data, list) else data.get("accepts", [])
     requirements = [PaymentRequirements.model_validate(item) for item in accepts]
-    error = None if isinstance(data, list) else data.get("error")
-    return PaymentRequired(x402_version=2, error=error, accepts=requirements)
+    if isinstance(data, list):
+        return PaymentRequired(x402_version=2, accepts=requirements)
+
+    # Preserve extensions (Bazaar discovery declaration) + resource so the
+    # payment payload carries them back to the facilitator — this is what
+    # triggers Bazaar indexing on settlement.
+    from x402.schemas.payments import ResourceInfo
+
+    resource_raw = data.get("resource")
+    return PaymentRequired(
+        x402_version=2,
+        error=data.get("error"),
+        accepts=requirements,
+        resource=ResourceInfo.model_validate(resource_raw) if resource_raw else None,
+        extensions=data.get("extensions"),
+    )
 
 
 def parse_settle_response(headers: dict[str, str]) -> dict[str, Any] | None:
