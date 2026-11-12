@@ -1,0 +1,228 @@
+"""Tests for the RPC-based transaction simulation module."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from eth_abi import encode as eth_abi_encode
+from web3 import Web3
+from web3.exceptions import ContractLogicError
+
+from preflight.core import simulation as simulation_mod
+from preflight.core.simulation import (
+    ERROR_SELECTOR,
+    PANIC_SELECTOR,
+    SIMULATOR_ADDRESS,
+    _decode_revert,
+    run_simulation,
+)
+from preflight.types import SimRequest
+
+
+class MockEth:
+    """Mock web3.eth for offline simulation tests."""
+
+    def __init__(
+        self,
+        code: str = "0x6000",
+        revert_data: str | None = None,
+        fail_call: bool = False,
+        fail_code: bool = False,
+    ):
+        self.code = code
+        self.revert_data = revert_data
+        self.fail_call = fail_call
+        self.fail_code = fail_code
+        self.last_call_tx: dict[str, Any] | None = None
+        self.last_state_override: dict[str, Any] | None = None
+
+    def get_code(self, address: str) -> bytes:
+        if self.fail_code:
+            raise ConnectionError("RPC offline")
+        return bytes.fromhex(self.code.removeprefix("0x"))
+
+    def call(
+        self,
+        tx: dict[str, Any],
+        block: str = "latest",
+        state_override: dict[str, Any] | None = None,
+    ) -> bytes:
+        self.last_call_tx = tx
+        self.last_state_override = state_override
+        if self.fail_call:
+            raise ConnectionError("RPC offline")
+        if self.revert_data:
+            raise ContractLogicError("execution reverted", data=self.revert_data)
+        return b""
+
+
+def _mock_w3_factory(code: str = "0x6000", **kwargs: Any):
+    """Return a factory that replaces _create_web3 in simulation.py."""
+    eth = MockEth(code=code, **kwargs)
+
+    def factory(rpc_url: str) -> SimpleNamespace:
+        return SimpleNamespace(eth=eth)
+
+    factory._eth = eth  # expose for assertions
+    return factory
+
+
+class TestRevertDecoding:
+    def test_decode_error_string(self):
+        reason = "transfer rejected"
+        data = ERROR_SELECTOR + eth_abi_encode(["string"], [reason]).hex()
+        assert _decode_revert(data) == reason
+
+    def test_decode_panic(self):
+        data = PANIC_SELECTOR + eth_abi_encode(["uint256"], [17]).hex()
+        assert _decode_revert(data) == "Panic(17)"
+
+    def test_decode_unknown(self):
+        data = "0xdeadbeef1234"
+        assert _decode_revert(data) == data
+
+
+class TestRunSimulation:
+    @pytest.mark.asyncio
+    async def test_invalid_to_address(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(simulation_mod, "_create_web3", _mock_w3_factory())
+        # 42 chars but invalid checksum/hex.
+        req = SimRequest(to="0x000000000000000000000000000000000000000g")
+        report = await run_simulation(req)
+        assert report.verdict == "review"
+        assert any(f.id == "heuristic:validation:checksum" for f in report.findings)
+        assert report.reverted is False
+
+    @pytest.mark.asyncio
+    async def test_call_to_contract_no_revert(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x60006000")
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(to="0xdAC17F958D2ee523a2206206994597C13D831ec7", data="0x")
+        report = await run_simulation(req)
+        assert report.verdict == "looks_ok"
+        assert report.reverted is False
+        assert report.from_address == SIMULATOR_ADDRESS
+
+    @pytest.mark.asyncio
+    async def test_call_to_eoa_with_data(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x")
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(
+            to="0x0000000000000000000000000000000000000001", data="0x1234"
+        )
+        report = await run_simulation(req)
+        assert report.verdict == "looks_ok"
+        assert any(f.id == "sim:call-to-eoa" for f in report.findings)
+        assert "Target" in " ".join(report.notes)
+
+    @pytest.mark.asyncio
+    async def test_plain_value_transfer_to_eoa(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x")
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(
+            to="0x0000000000000000000000000000000000000001",
+            value_wei="1000000000000000",
+        )
+        report = await run_simulation(req)
+        assert report.verdict == "looks_ok"
+        assert report.value_wei == "1000000000000000"
+        assert mock._eth.last_state_override is not None
+        assert "Balance override" in " ".join(report.notes)
+
+    @pytest.mark.asyncio
+    async def test_revert_error_string(self, monkeypatch: pytest.MonkeyPatch):
+        reason = "insufficient allowance"
+        data = ERROR_SELECTOR + eth_abi_encode(["string"], [reason]).hex()
+        mock = _mock_w3_factory(code="0x6000", revert_data=data)
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7", data="0x1234"
+        )
+        report = await run_simulation(req)
+        assert report.reverted is True
+        assert report.revert_reason == reason
+        assert report.verdict == "block"
+        assert any(f.id == "sim:revert" for f in report.findings)
+
+    @pytest.mark.asyncio
+    async def test_revert_panic(self, monkeypatch: pytest.MonkeyPatch):
+        data = PANIC_SELECTOR + eth_abi_encode(["uint256"], [1]).hex()
+        mock = _mock_w3_factory(code="0x6000", revert_data=data)
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7", data="0x1234"
+        )
+        report = await run_simulation(req)
+        assert report.reverted is True
+        assert report.revert_reason == "Panic(1)"
+        assert report.verdict == "block"
+
+    @pytest.mark.asyncio
+    async def test_rpc_failure_does_not_raise(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x6000", fail_call=True, fail_code=True)
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7", data="0x1234"
+        )
+        report = await run_simulation(req)
+        assert report.verdict == "looks_ok"
+        assert any(f.id == "sim:rpc-failure" for f in report.findings)
+        assert "RPC" in " ".join(report.notes)
+
+    @pytest.mark.asyncio
+    async def test_source_detectors_merged(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x6000")
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        source = """
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract BlacklistToken {
+    mapping(address => bool) public isBlacklisted;
+    address public owner;
+    constructor() { owner = msg.sender; }
+    function transfer(address to, uint256 amount) external {
+        require(!isBlacklisted[to], "blacklisted");
+    }
+    function setBlacklist(address account, bool status) external {
+        require(msg.sender == owner, "Not owner");
+        isBlacklisted[account] = status;
+    }
+}
+"""
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            data="0x1234",
+            source=source,
+        )
+        report = await run_simulation(req)
+        assert any("honeypot" in f.detector for f in report.findings)
+        assert report.verdict == "block"
+
+    @pytest.mark.asyncio
+    async def test_custom_from_address(self, monkeypatch: pytest.MonkeyPatch):
+        mock = _mock_w3_factory(code="0x6000")
+        monkeypatch.setattr(simulation_mod, "_create_web3", mock)
+        custom = Web3.to_checksum_address("0x" + "11" * 20)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            data="0x",
+            from_address=custom,
+        )
+        report = await run_simulation(req)
+        assert report.from_address == custom
+
+
+class TestRunSimulationNetwork:
+    @pytest.mark.network
+    @pytest.mark.asyncio
+    async def test_live_erc20_call(self):
+        req = SimRequest(
+            to="0x036CbD53842c5426634e7929541eC2318f3dCF7e",  # Base Sepolia USDC
+            data="0x70a082310000000000000000000000000000000000000000000000000000000000000000",
+        )
+        report = await run_simulation(req)
+        assert report.reverted is False
+        assert report.simulator == "rpc-ethcall:v1"

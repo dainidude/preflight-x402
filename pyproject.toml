@@ -1,0 +1,38 @@
+[project]
+name = "preflight-x402"
+version = "0.1.0"
+description = "Preflight — smart-contract & transaction pre-flight security API, paid per call via x402 (USDC on Base)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "x402>=0.1",
+    "mcp>=1.2",
+    "eth-account>=0.13",
+    "web3>=6.19",
+    "slither-analyzer>=0.10",
+    "py-solc-x>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/preflight"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "network: marks tests that require internet access (deselected by default runs)",
+]

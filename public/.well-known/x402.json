@@ -1,0 +1,676 @@
+{
+  "x402Version": 2,
+  "resource": "http://127.0.0.1:8000",
+  "service": "Preflight",
+  "service_name": "Preflight",
+  "description": "Pay-per-call smart-contract & transaction pre-flight security API. Submit Solidity source or a transaction for simulation and receive a severity-scored, EIP-712-attested verdict, paid per call via x402 (HTTP 402 + USDC on Base Sepolia testnet).",
+  "version": "0.1.0",
+  "protocol": "x402",
+  "tags": [
+    "security",
+    "solidity",
+    "smart-contracts",
+    "simulation",
+    "audit"
+  ],
+  "payment": {
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "network_caip": "eip155:84532",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "asset_symbol": "USDC",
+    "asset_decimals": 6,
+    "facilitator": "https://x402.org/facilitator",
+    "pay_to": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41",
+    "max_timeout_seconds": 60
+  },
+  "pricing": {
+    "POST /v1/scan": {
+      "price": "$0.01",
+      "amount": "10000",
+      "description": "Single-file Solidity security scan (static + custom DeFi detectors)",
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "scheme": "exact"
+    },
+    "POST /v1/scan/project": {
+      "price": "$0.10",
+      "amount": "100000",
+      "description": "Multi-file project security scan",
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "scheme": "exact"
+    },
+    "POST /v1/sim": {
+      "price": "$0.05",
+      "amount": "50000",
+      "description": "Transaction pre-flight simulation (revert, gas, honeypot heuristics)",
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "scheme": "exact"
+    },
+    "POST /v1/address-risk": {
+      "price": "$0.005",
+      "amount": "5000",
+      "description": "Static address risk heuristics",
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "scheme": "exact"
+    }
+  },
+  "endpoints": {
+    "GET /": "service info and price list (free)",
+    "GET /health": "health check (free)",
+    "GET /metrics": "revenue and usage metrics (free)",
+    "POST /v1/scan": "single-file security scan ($0.01)",
+    "POST /v1/scan/project": "multi-file project security scan ($0.10)",
+    "POST /v1/sim": "transaction pre-flight simulation ($0.05)",
+    "POST /v1/address-risk": "address risk heuristics ($0.005)",
+    "GET /llms.txt": "LLM-facing service description",
+    "GET /.well-known/x402.json": "this file"
+  },
+  "extensions": {
+    "bazaar": {
+      "POST /v1/scan": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "source": "pragma solidity ^0.8.20; contract VulnerableVault { ... }",
+              "contract_name": "VulnerableVault"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "block",
+              "score": 92.5,
+              "findings": [
+                {
+                  "id": "reentrancy-no-eth",
+                  "title": "Reentrancy on withdraw()",
+                  "severity": "critical",
+                  "confidence": 0.98,
+                  "description": "External call before state update",
+                  "snippet": null,
+                  "detector": "slither",
+                  "reference": null
+                }
+              ],
+              "contract_name": "VulnerableVault",
+              "solc_version": "0.8.20",
+              "scanner_versions": {
+                "slither": "0.10.4",
+                "custom": "0.1.0"
+              },
+              "scanned_at": "2026-11-12T00:00:00Z",
+              "source_sha256": "0xabababababababababababababababababababababababababababababababab",
+              "attestation": null,
+              "notes": []
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "contract_name": {
+                      "type": "string"
+                    },
+                    "solc_version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "source"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "POST /v1/scan/project": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "files": {
+                "Vault.sol": "pragma solidity ^0.8.20; contract Vault { ... }"
+              },
+              "contract_name": "Vault"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "block",
+              "score": 92.5,
+              "findings": [
+                {
+                  "id": "reentrancy-no-eth",
+                  "title": "Reentrancy on withdraw()",
+                  "severity": "critical",
+                  "confidence": 0.98,
+                  "description": "External call before state update",
+                  "snippet": null,
+                  "detector": "slither",
+                  "reference": null
+                }
+              ],
+              "contract_name": "Vault",
+              "solc_version": "0.8.20",
+              "scanner_versions": {
+                "slither": "0.10.4",
+                "custom": "0.1.0"
+              },
+              "scanned_at": "2026-11-12T00:00:00Z",
+              "source_sha256": "0xabababababababababababababababababababababababababababababababab",
+              "attestation": null,
+              "notes": []
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "contract_name": {
+                      "type": "string"
+                    },
+                    "solc_version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "files"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "POST /v1/sim": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              "data": "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+              "value_wei": "0"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "block",
+              "score": 85.0,
+              "findings": [
+                {
+                  "id": "sim:revert",
+                  "title": "Simulated call reverts",
+                  "severity": "high",
+                  "confidence": 1.0,
+                  "description": "ERC-20 transfer reverted: transfer amount exceeds balance",
+                  "snippet": null,
+                  "detector": "heuristic:simulation",
+                  "reference": null
+                }
+              ],
+              "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              "from_address": "0x000000000000000000000000000000000000dEaD",
+              "value_wei": "0",
+              "reverted": true,
+              "revert_reason": "ERC20: transfer amount exceeds balance",
+              "gas_used": "24312",
+              "simulated_at": "2026-11-12T00:00:00Z",
+              "simulator": "rpc-ethcall:v1",
+              "attestation": null,
+              "notes": [
+                "demo: caller has no test USDC, so transfer() reverts"
+              ]
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "to": {
+                      "type": "string",
+                      "minLength": 42,
+                      "maxLength": 42
+                    },
+                    "data": {
+                      "type": "string",
+                      "pattern": "^0x[0-9a-fA-F]*$"
+                    },
+                    "value_wei": {
+                      "type": "string"
+                    },
+                    "from_address": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "to"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "POST /v1/address-risk": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "looks_ok",
+              "address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41",
+              "findings": [],
+              "checked_at": "2026-11-12T00:00:00Z",
+              "attestation": null
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "minLength": 42,
+                      "maxLength": 42
+                    }
+                  },
+                  "required": [
+                    "address"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "mcp": {
+        "preflight_check": {
+          "info": {
+            "input": {
+              "type": "mcp",
+              "toolName": "preflight_check",
+              "description": "Scan Solidity source and return a severity-scored security verdict ($0.01).",
+              "transport": "streamable-http",
+              "inputSchema": {
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "contract_name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source"
+                ]
+              },
+              "example": {
+                "source": "contract VulnerableVault { ... }",
+                "contract_name": "VulnerableVault"
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  },
+                  "inputSchema": {
+                    "type": "object"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "streamable-http",
+                      "sse"
+                    ]
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type",
+                  "toolName",
+                  "inputSchema"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        "preflight_sim": {
+          "info": {
+            "input": {
+              "type": "mcp",
+              "toolName": "preflight_sim",
+              "description": "Simulate a transaction against a contract and return revert/gas/risk findings ($0.05).",
+              "transport": "streamable-http",
+              "inputSchema": {
+                "properties": {
+                  "to": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string"
+                  },
+                  "value_wei": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "to"
+                ]
+              },
+              "example": {
+                "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "data": "0xa9059cbb...",
+                "value_wei": "0"
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  },
+                  "inputSchema": {
+                    "type": "object"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "streamable-http",
+                      "sse"
+                    ]
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type",
+                  "toolName",
+                  "inputSchema"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "tools": {
+      "preflight_check": "scan Solidity source ($0.01)",
+      "preflight_sim": "simulate a transaction ($0.05)",
+      "preflight_pricing": "free price list"
+    },
+    "transport": "stdio | streamable-http"
+  }
+}

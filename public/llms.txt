@@ -1,0 +1,172 @@
+# Preflight
+
+> Pay-per-call smart-contract & transaction pre-flight security API. Submit
+> Solidity source or a transaction for simulation and receive a severity-scored,
+> signed security verdict. Paid per call via x402 (HTTP 402 + USDC on Base
+> Sepolia testnet).
+
+## Endpoints
+
+| Method | Path | Price | Auth |
+|---|---|---|---|
+| GET | `/` | free | none |
+| GET | `/health` | free | none |
+| GET | `/metrics` | free | none |
+| POST | `/v1/scan` | $0.01 | x402 |
+| POST | `/v1/sim` | $0.05 | x402 |
+| POST | `/v1/scan/project` | $0.10 | x402 |
+| POST | `/v1/address-risk` | $0.005 | x402 |
+
+`/v1/sim` is transaction pre-flight simulation: give a target `to`, optional
+0x-hex calldata `data`, and optional `value_wei`; get back a `SimReport` with
+`reverted`, `revert_reason`, `gas_used`, and severity-scored findings (a
+reverting call is a real finding, not a client error). `/metrics` exposes
+revenue and usage counters (for example `revenue_base_units`) with no payment.
+
+## Payment
+
+- Network: `base-sepolia` (CAIP-2 `eip155:84532`)
+- Asset: test USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (6 decimals)
+- Scheme: `exact` (EIP-3009 transfer-with-authorization)
+- Pay to: `0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa`
+- Facilitator: `https://x402.org/facilitator`
+
+A paid route responds `402 Payment Required` with a `PAYMENT-REQUIRED` header
+containing the x402 payment requirements. Retry the same request with a
+`PAYMENT-SIGNATURE` header carrying the signed payment payload. A successful
+paid response carries a `PAYMENT-RESPONSE` header with the settlement result.
+
+## Request bodies
+
+`POST /v1/scan`:
+
+```json
+{
+  "source": "pragma solidity ^0.8.20; contract Vault { ... }",
+  "contract_name": "Vault",
+  "solc_version": "0.8.20"
+}
+```
+
+`POST /v1/sim`:
+
+```json
+{
+  "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "data": "0xa9059cbb...",
+  "value_wei": "0",
+  "from_address": "0x...",
+  "source": "pragma solidity ^0.8.20; contract Token { ... }"
+}
+```
+
+Only `to` is required. `data` is 0x-hex calldata; omit it for a plain value
+transfer. `source` is optional Solidity source for static honeypot detectors.
+
+`POST /v1/scan/project`:
+
+```json
+{"files": {"Vault.sol": "pragma solidity ^0.8.20; contract Vault { ... }"}, "contract_name": "Vault"}
+```
+
+`POST /v1/address-risk`:
+
+```json
+{"address": "0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa"}
+```
+
+## Response (ScanReport)
+
+```json
+{
+  "verdict": "block",
+  "score": 92.5,
+  "findings": [
+    {
+      "id": "reentrancy-no-eth",
+      "title": "Reentrancy on withdraw()",
+      "severity": "critical",
+      "confidence": 0.98,
+      "description": "External call before state update",
+      "detector": "slither"
+    }
+  ],
+  "contract_name": "Vault",
+  "solc_version": "0.8.20",
+  "scanned_at": "2026-11-10T00:00:00Z",
+  "source_sha256": "0x...",
+  "attestation": null
+}
+```
+
+## Response (SimReport)
+
+```json
+{
+  "verdict": "block",
+  "score": 85.0,
+  "findings": [
+    {
+      "id": "sim:revert",
+      "title": "Simulated call reverts",
+      "severity": "high",
+      "confidence": 1.0,
+      "description": "ERC20: transfer amount exceeds balance",
+      "detector": "heuristic:simulation"
+    }
+  ],
+  "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "from_address": "0x...",
+  "value_wei": "0",
+  "reverted": true,
+  "revert_reason": "ERC20: transfer amount exceeds balance",
+  "gas_used": "24312",
+  "simulated_at": "2026-11-10T00:00:00Z",
+  "simulator": "rpc-ethcall:v1",
+  "attestation": null
+}
+```
+
+## curl examples
+
+```bash
+# Service info + prices
+curl http://127.0.0.1:8000/
+
+# Revenue/usage metrics (free)
+curl http://127.0.0.1:8000/metrics
+
+# Dev-mode scan (no payment; server must run DEV_MODE=1)
+curl -X POST http://127.0.0.1:8000/v1/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"contract Bad {}","contract_name":"Bad"}'
+
+# Paid loop, step 1: request -> 402 with PAYMENT-REQUIRED
+curl -i -X POST http://127.0.0.1:8000/v1/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"contract Bad {}"}'
+
+# Paid loop, step 2: sign the requirements with x402.client, retry with
+#   PAYMENT-SIGNATURE: <base64 signed x402 payload>
+#   -> 200 + ScanReport + PAYMENT-RESPONSE (settlement tx)
+curl -i -X POST http://127.0.0.1:8000/v1/scan \
+  -H 'Content-Type: application/json' \
+  -H 'PAYMENT-SIGNATURE: <base64>' \
+  -d '{"source":"contract Bad {}"}'
+
+# The demo client performs the whole loop for you:
+#   request -> 402 -> build payment via x402.client -> retry -> verdict
+uv run python client/pay_client.py --route scan --file contract.sol
+uv run python client/pay_client.py --route sim    # zero-arg revert demo
+```
+
+## MCP
+
+An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01)
+and `preflight_sim {to, data?, value_wei?}` ($0.05), plus free
+`preflight_pricing`. Run it with `uv run python -m preflight.mcp.server`
+(stdio) or `--http` for streamable HTTP.
+
+## Dev mode
+
+Set `DEV_MODE=1` on the API server to bypass payment locally.
