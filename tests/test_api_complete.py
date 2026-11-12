@@ -65,7 +65,7 @@ def test_unpaid_request_gets_spec_shaped_402(prod_client: TestClient) -> None:
     assert body["x402Version"] == 2
     assert body["accepts"][0]["scheme"] == "exact"
     assert body["accepts"][0]["payTo"].startswith("0x")
-    assert body["accepts"][0]["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
+    assert body["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
     assert body["resource"]["serviceName"] == "Preflight"
     # PAYMENT-REQUIRED header carries base64 JSON of the full PaymentRequired
     header = r.headers.get("payment-required")

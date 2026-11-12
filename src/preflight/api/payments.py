@@ -188,27 +188,20 @@ def build_requirements(route: str, cfg: Config | None = None) -> list[PaymentReq
     return _requirements_cache[route]
 
 
-def _with_bazaar(route: str, requirements: list[PaymentRequirements]) -> list[dict]:
-    """Dump requirements with the route's Bazaar declaration attached.
+def _bazaar_decl(route: str) -> dict[str, Any] | None:
+    """The route's Bazaar declaration with the method injected.
 
-    Injection happens post-dump so it works on any x402 package version
-    (PaymentRequirements.extensions is not present in all releases).
+    The CDP validator requires info.input.method; declare_discovery_extension
+    omits it (normally enriched at runtime). All Preflight paid routes are POST.
     """
     bazaar = ROUTE_BAZAAR.get(route)
-    if bazaar:
-        # The CDP validator requires info.input.method; declare_discovery_extension
-        # omits it (enriched at runtime). All Preflight paid routes are POST.
-        bazaar = json.loads(json.dumps(bazaar))
-        bazaar.setdefault("bazaar", {}).setdefault("info", {}).setdefault("input", {})[
-            "method"
-        ] = "POST"
-    accepts: list[dict] = []
-    for r in requirements:
-        d = r.model_dump(mode="json", exclude_none=True)
-        if bazaar:
-            d["extensions"] = bazaar
-        accepts.append(d)
-    return accepts
+    if not bazaar:
+        return None
+    bazaar = json.loads(json.dumps(bazaar))
+    bazaar.setdefault("bazaar", {}).setdefault("info", {}).setdefault("input", {})[
+        "method"
+    ] = "POST"
+    return bazaar
 
 
 def parse_payment_header(header: str) -> PaymentPayload | PaymentPayloadV1:
@@ -292,18 +285,16 @@ def _payment_required_response(
         service_name="Preflight",
         tags=["security", "solidity", "smart-contracts", "simulation"],
     )
-    body = PaymentRequired(
+    bazaar = _bazaar_decl(route)
+    payment_required = PaymentRequired(
         error=f"Payment required for {route}",
         resource=resource,
         accepts=requirements,
-    ).model_dump(mode="json", by_alias=True, exclude_none=True)
-    body["accepts"] = _with_bazaar(route, requirements)
+        extensions=bazaar,
+    )
+    body = payment_required.model_dump(mode="json", by_alias=True, exclude_none=True)
     encoded = safe_base64_encode(
-        PaymentRequired(
-            error=f"Payment required for {route}",
-            resource=resource,
-            accepts=requirements,
-        ).model_dump_json(by_alias=True, exclude_none=True)
+        payment_required.model_dump_json(by_alias=True, exclude_none=True)
     )
     return JSONResponse(
         status_code=402,
