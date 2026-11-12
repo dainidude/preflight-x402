@@ -184,12 +184,31 @@ def build_requirements(route: str, cfg: Config | None = None) -> list[PaymentReq
             extra={"description": description},
         )
         requirements = server.build_payment_requirements(rc)
-        # Attach the Bazaar discovery declaration so the 402 advertises it
-        # (CDP Bazaar validation requires an extensions.bazaar block).
-        for req in requirements:
-            req.extensions = dict(ROUTE_BAZAAR.get(route) or {})
         _requirements_cache[route] = requirements
     return _requirements_cache[route]
+
+
+def _with_bazaar(route: str, requirements: list[PaymentRequirements]) -> list[dict]:
+    """Dump requirements with the route's Bazaar declaration attached.
+
+    Injection happens post-dump so it works on any x402 package version
+    (PaymentRequirements.extensions is not present in all releases).
+    """
+    bazaar = ROUTE_BAZAAR.get(route)
+    if bazaar:
+        # The CDP validator requires info.input.method; declare_discovery_extension
+        # omits it (enriched at runtime). All Preflight paid routes are POST.
+        bazaar = json.loads(json.dumps(bazaar))
+        bazaar.setdefault("bazaar", {}).setdefault("info", {}).setdefault("input", {})[
+            "method"
+        ] = "POST"
+    accepts: list[dict] = []
+    for r in requirements:
+        d = r.model_dump(mode="json", exclude_none=True)
+        if bazaar:
+            d["extensions"] = bazaar
+        accepts.append(d)
+    return accepts
 
 
 def parse_payment_header(header: str) -> PaymentPayload | PaymentPayloadV1:
@@ -257,7 +276,7 @@ usage = UsageTracker()
 def _payment_required_response(route: str, requirements: list[PaymentRequirements]) -> Response:
     from fastapi.responses import JSONResponse
 
-    accepts = [r.model_dump(mode="json", exclude_none=True) for r in requirements]
+    accepts = _with_bazaar(route, requirements)
     payload = json.dumps(accepts)
     return JSONResponse(
         status_code=402,
