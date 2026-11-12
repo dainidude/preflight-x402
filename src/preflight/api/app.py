@@ -181,12 +181,30 @@ async def scan_project(request: ProjectScanRequest, raw: Request) -> Response:
 async def sim_transaction(request: SimRequest, raw: Request) -> Response:
     """Transaction pre-flight simulation — $0.05 via x402."""
     report: SimReport = await _call_core(_get_run_simulation(), request)
+    return _finalize_sim(report, "POST /v1/sim", raw)
+
+
+@app.post("/v1/sim/deep")
+async def sim_deep(request: SimRequest, raw: Request) -> Response:
+    """Deep transaction simulation (anvil fork) — $0.25 via x402."""
+    request.mode = "deep"
+    try:
+        report: SimReport = await _call_core(_get_run_simulation(), request)
+    except NotImplementedError:
+        return JSONResponse(
+            {"error": "deep simulation tier is rolling out — try POST /v1/sim (quick)"},
+            status_code=503,
+        )
+    return _finalize_sim(report, "POST /v1/sim/deep", raw)
+
+
+def _finalize_sim(report: SimReport, route: str, raw: Request) -> Response:
     body = report.model_dump(mode="json")
     if body.get("attestation") is None:
         body["attestation"] = sign_report(body)
     from preflight.api.metrics import collector
 
-    collector.record_scan("POST /v1/sim", report.verdict, getattr(raw.state, "pf_paid", False))
+    collector.record_scan(route, report.verdict, getattr(raw.state, "pf_paid", False))
     return JSONResponse(body)
 
 
@@ -271,6 +289,7 @@ if __name__ == "__main__":
 _PAID_PATHS: dict[str, str] = {  # path -> USD amount
     "/v1/scan": "0.01",
     "/v1/sim": "0.05",
+    "/v1/sim/deep": "0.25",
     "/v1/scan/project": "0.10",
     "/v1/address-risk": "0.005",
 }

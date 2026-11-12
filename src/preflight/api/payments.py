@@ -62,6 +62,7 @@ FREE_ROUTES = {
 ROUTE_PRICES: dict[str, tuple[str, str]] = {
     "POST /v1/scan": ("$0.01", "Smart-contract security scan (static + custom DeFi detectors)"),
     "POST /v1/sim": ("$0.05", "Transaction pre-flight simulation (RPC eth_call)"),
+    "POST /v1/sim/deep": ("$0.25", "Deep transaction simulation (anvil fork: gas, balance deltas, traces)"),
     "POST /v1/scan/project": ("$0.10", "Multi-file project security scan"),
     "POST /v1/address-risk": ("$0.005", "Address risk heuristics"),
 }
@@ -109,6 +110,27 @@ ROUTE_BAZAAR: dict[str, dict] = {
         },
         body_type="json",
         output=OutputConfig(example={"verdict": "review", "reverted": True, "revert_reason": "…"}),
+    ),
+    "POST /v1/sim/deep": declare_discovery_extension(
+        input={"to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "data": "0x", "value_wei": "0"},
+        input_schema={
+            "properties": {
+                "to": {"type": "string", "description": "Target contract address"},
+                "data": {"type": "string", "description": "0x-hex calldata (omit for plain value transfer)"},
+                "value_wei": {"type": "string", "description": "Wei value, decimal string"},
+            },
+            "required": ["to"],
+        },
+        body_type="json",
+        output=OutputConfig(
+            example={
+                "verdict": "review",
+                "reverted": False,
+                "gas_used": "43281",
+                "balance_delta_wei": "-10000000000001",
+                "internal_calls": ["0xabc… → transfer(0xa9059cbb)"],
+            }
+        ),
     ),
     "POST /v1/scan/project": declare_discovery_extension(
         input={"files": {"Vault.sol": "contract Vault {}"}},

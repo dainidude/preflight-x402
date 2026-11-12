@@ -81,12 +81,14 @@ class AddressRiskReport(BaseModel):
 
 
 class SimRequest(BaseModel):
-    """Body of POST /v1/sim — transaction pre-flight simulation.
+    """Body of POST /v1/sim and POST /v1/sim/deep — pre-flight simulation.
 
     `to` is required (the contract being called). `data` is 0x-hex calldata
     (omit for a plain value transfer). `value_wei` is the wei sent. `source`
     optionally carries Solidity source of the target contract so static
-    honeypot detectors can run alongside the RPC simulation.
+    honeypot detectors can run alongside the RPC simulation. `mode` selects
+    quick (eth_call) or deep (local anvil fork: gas, balance deltas, traces).
+    The /v1/sim/deep endpoint forces mode="deep" server-side.
     """
 
     to: str = Field(min_length=42, max_length=42)
@@ -94,10 +96,11 @@ class SimRequest(BaseModel):
     value_wei: str | None = Field(default=None, description="Wei value, decimal string")
     from_address: str | None = Field(default=None, description="Optional sender override")
     source: str | None = Field(default=None, max_length=2_000_000)
+    mode: str = Field(default="quick", pattern=r"^(quick|deep)$")
 
 
 class SimReport(BaseModel):
-    """Result of a transaction pre-flight simulation ($0.05)."""
+    """Result of a transaction pre-flight simulation."""
 
     verdict: Verdict
     score: float = Field(ge=0.0, le=100.0)
@@ -108,6 +111,12 @@ class SimReport(BaseModel):
     reverted: bool = Field(description="Did the simulated call revert?")
     revert_reason: str | None = None
     gas_used: str | None = Field(default=None, description="Gas used, if measured")
+    balance_delta_wei: str | None = Field(
+        default=None, description="Net wei balance change of the sender (deep mode)"
+    )
+    internal_calls: list[str] = Field(
+        default_factory=list, description="Internal calls observed (deep mode), e.g. ['to → fn(sel4)']"
+    )
     simulated_at: str = Field(description="ISO-8601 UTC timestamp")
     simulator: str = Field(description="e.g. 'rpc-ethcall:v1' or 'anvil-fork:v1'")
     attestation: dict[str, Any] | None = None

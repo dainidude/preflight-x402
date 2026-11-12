@@ -49,6 +49,8 @@ class Config:
             or NETWORK_USDC.get(self.network, NETWORK_USDC["base-sepolia"])
         )
         self.client_private_key: str | None = os.getenv("CLIENT_PRIVATE_KEY")
+        # Durable-state directory (Modal Volume in prod; empty = in-memory only)
+        self.state_dir: str | None = os.getenv("STATE_DIR") or None
         # CDP Facilitator credentials (optional): when both are set, the server
         # verifies/settles via Coinbase's CDP Facilitator (KYT/OFAC + the Bazaar
         # discovery that indexes settled payments). Fallback: x402.org facilitator.
