@@ -1,6 +1,6 @@
 # Preflight — Launch Checklist & Runbook
 
-Status: **testnet launch ready** (Base Sepolia). Mainnet is a config flip away — see below.
+Status: **LIVE on Base mainnet** (real USDC). Testnet (base-sepolia) remains the dev sandbox via env.
 
 ## 1. Service routes
 

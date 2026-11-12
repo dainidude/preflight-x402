@@ -286,6 +286,7 @@ def _openapi_with_x402() -> dict[str, Any]:
         schema.setdefault("x-discovery", {})["ownershipProofs"] = [pay_to]
     schema["info"]["contact"] = {
         "name": "Preflight",
+        "email": "preflight-contact@protonmail.com",
         "url": "https://github.com/dainidude/preflight-x402",
     }
     schema["info"]["x-guidance"] = (

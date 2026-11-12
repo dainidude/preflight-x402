@@ -2,8 +2,8 @@
 
 > Pay-per-call smart-contract & transaction pre-flight security API. Submit
 > Solidity source or a transaction for simulation and receive a severity-scored,
-> signed security verdict. Paid per call via x402 (HTTP 402 + USDC on Base
-> Sepolia testnet).
+> signed security verdict. Paid per call via x402 (HTTP 402 + real USDC on
+> Base mainnet).
 
 ## Endpoints
 
@@ -28,7 +28,7 @@ revenue and usage counters (for example `revenue_base_units`) with no payment.
 
 ## Payment
 
-- Network: `base-sepolia` (CAIP-2 `eip155:84532`)
+- Network: `base` (CAIP-2 `eip155:8453`, Base mainnet)
 - Asset: test USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (6 decimals)
 - Scheme: `exact` (EIP-3009 transfer-with-authorization)
 - Pay to: `0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa`

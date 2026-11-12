@@ -15,9 +15,9 @@
   ],
   "payment": {
     "scheme": "exact",
-    "network": "base-sepolia",
-    "network_caip": "eip155:84532",
-    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "network": "base",
+    "network_caip": "eip155:8453",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "asset_symbol": "USDC",
     "asset_decimals": 6,
     "facilitator": "https://x402.org/facilitator",
@@ -29,32 +29,32 @@
       "price": "$0.01",
       "amount": "10000",
       "description": "Single-file Solidity security scan (static + custom DeFi detectors)",
-      "network": "eip155:84532",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
     },
     "POST /v1/scan/project": {
       "price": "$0.10",
       "amount": "100000",
       "description": "Multi-file project security scan",
-      "network": "eip155:84532",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
     },
     "POST /v1/sim": {
       "price": "$0.05",
       "amount": "50000",
       "description": "Transaction pre-flight simulation (revert, gas, honeypot heuristics)",
-      "network": "eip155:84532",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
     },
     "POST /v1/address-risk": {
       "price": "$0.005",
       "amount": "5000",
       "description": "Static address risk heuristics",
-      "network": "eip155:84532",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
     }
   },
@@ -309,7 +309,7 @@
             "type": "http",
             "bodyType": "json",
             "body": {
-              "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
               "data": "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
               "value_wei": "0"
             },
@@ -332,7 +332,7 @@
                   "reference": null
                 }
               ],
-              "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+              "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
               "from_address": "0x000000000000000000000000000000000000dEaD",
               "value_wei": "0",
               "reverted": true,
@@ -612,7 +612,7 @@
                 ]
               },
               "example": {
-                "to": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                 "data": "0xa9059cbb...",
                 "value_wei": "0"
               }

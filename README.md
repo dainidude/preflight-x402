@@ -3,7 +3,7 @@
 Pay-per-call security scans and transaction simulations for AI agents.
 POST Solidity source or a transaction, receive a severity-scored,
 **EIP-712-attested** verdict: `looks_ok | review | block`.
-Payments over the **x402 protocol** (HTTP 402 + USDC on Base Sepolia testnet).
+Payments over the **x402 protocol** (HTTP 402 + real USDC on Base mainnet).
 
 Built from the product plan in `dud3-vault/LLM/2026-11-08 - x402 Product Plans.md`
 by hermes + omp + crush + opencode in a 4-pane Herdr session.
@@ -50,7 +50,7 @@ src/preflight/
 public/    llms.txt + .well-known/x402.json (discovery)
 ```
 
-- **Payments**: `x402` package v2 — `exact` scheme, USDC, Base Sepolia;
+- **Payments**: `x402` package v2 — `exact` scheme, USDC, Base mainnet (CDP facilitator with KYT/OFAC);
   facilitator verifies + settles; server never holds custody.
 - **Attestations**: EIP-712 over `(source_sha256, verdict, findings_root)` — buyers can prove what we said.
 - **Determinism**: static analysis + `eth_call` simulation; verdicts are reproducible.

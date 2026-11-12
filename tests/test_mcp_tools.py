@@ -268,9 +268,9 @@ def test_x402_discovery_real_values() -> None:
     doc = _discovery()
     payment = doc["payment"]
     assert payment["pay_to"] == "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"
-    assert payment["network_caip"] == "eip155:84532"
-    assert payment["network"] == "base-sepolia"
-    assert payment["asset"] == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assert payment["network_caip"] == "eip155:8453"
+    assert payment["network"] == "base"
+    assert payment["asset"] == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     assert payment["scheme"] == "exact"
     assert payment["facilitator"] == "https://x402.org/facilitator"
 
@@ -283,7 +283,7 @@ def test_x402_discovery_real_values() -> None:
     assert doc["pricing"]["POST /v1/address-risk"]["price"] == "$0.005"
     assert doc["pricing"]["POST /v1/address-risk"]["amount"] == "5000"
     for route in doc["pricing"].values():
-        assert route["network"] == "eip155:84532"
+        assert route["network"] == "eip155:8453"
         assert route["asset"] == payment["asset"]
         assert route["scheme"] == "exact"
     assert "GET /metrics" in doc["endpoints"]
