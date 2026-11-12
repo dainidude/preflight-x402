@@ -35,16 +35,17 @@ DEPLOY_ENV = {
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install_from_pyproject(REPO / "pyproject.toml")
+    .workdir("/app")
+    .env({"PYTHONPATH": "/app/src"})
     # Pre-bake solc so the first scan is fast (py-solc-x downloads to ~/.solcx).
     .run_commands(
         "python -c \"import solcx; [solcx.install_solc(v) for v in ('0.8.20','0.8.24','0.8.26')]\"",
     )
     # No copy=True: files are mounted fresh at container start, so every
     # deploy serves the latest source and public/ without image rebuilds.
+    # (add_local_* must be LAST — nothing after them counts as a build step.)
     .add_local_dir(REPO / "src", "/app/src")
     .add_local_dir(REPO / "public", "/app/public")
-    .workdir("/app")
-    .env({"PYTHONPATH": "/app/src"})
 )
 
 app = modal.App("preflight-api", image=image)

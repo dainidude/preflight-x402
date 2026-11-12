@@ -1,6 +1,6 @@
 {
   "x402Version": 2,
-  "resource": "https://dainius-raulinaitis--preflight-api-api.us-east.modal.run",
+  "resource": "https://preflight--preflight-api-api.us-east.modal.run",
   "service": "Preflight",
   "service_name": "Preflight",
   "description": "Pay-per-call smart-contract & transaction pre-flight security API. Submit Solidity source or a transaction for simulation and receive a severity-scored, EIP-712-attested verdict, paid per call via x402 (HTTP 402 + USDC on Base Sepolia testnet).",
