@@ -21,6 +21,15 @@ SEVERITY_WEIGHTS: dict[Severity, float] = {
     "info": 0.1,
 }
 
+# Max-severity base score used by calculate_score.
+BASE_SCORES: dict[Severity, float] = {
+    "critical": 95.0,
+    "high": 80.0,
+    "medium": 50.0,
+    "low": 20.0,
+    "info": 5.0,
+}
+
 
 def determine_verdict(findings: list[Finding]) -> Verdict:
     """Determine verdict based on findings severity.
@@ -40,21 +49,29 @@ def determine_verdict(findings: list[Finding]) -> Verdict:
 def calculate_score(findings: list[Finding]) -> float:
     """Calculate security score 0-100 (higher = worse).
 
-    Weighted by severity and confidence.
+    Score starts from a max-severity base and adds diminishing contributions
+    from additional findings so that many low-severity findings cannot drown
+    out a critical.  Total score is capped below 100.
     """
     if not findings:
         return 0.0
 
-    total_weight = 0.0
-    for finding in findings:
-        weight = SEVERITY_WEIGHTS.get(finding.severity, 0.1) * finding.confidence
-        total_weight += weight
+    # Sort by severity (highest first), then confidence.
+    sorted_findings = sorted(
+        findings,
+        key=lambda f: (SEVERITY_ORDER.get(f.severity, 0), f.confidence),
+        reverse=True,
+    )
 
-    # Normalize: max possible weight per finding is 1.0 (critical with confidence 1.0)
-    # Scale to 0-100
-    max_possible = len(findings) * 1.0
-    score = (total_weight / max_possible) * 100.0
-    return min(score, 100.0)
+    base = BASE_SCORES.get(sorted_findings[0].severity, 5.0)
+
+    bonus = 0.0
+    # Additional findings contribute with rank k = 1, 2, ... denominator = k + 1.
+    for rank, finding in enumerate(sorted_findings[1:], start=1):
+        weight = SEVERITY_WEIGHTS.get(finding.severity, 0.1) * finding.confidence
+        bonus += weight / (rank + 1)
+
+    return round(min(base + bonus, 99.0), 2)
 
 
 def merge_findings(

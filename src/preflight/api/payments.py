@@ -66,10 +66,12 @@ ROUTE_PRICES: dict[str, tuple[str, str]] = {
     "POST /v1/sim/deep": ("$0.25", "Deep transaction simulation (anvil fork: gas, balance deltas, traces)"),
     "POST /v1/scan/project": ("$0.10", "Multi-file project security scan"),
     "POST /v1/address-risk": ("$0.005", "Address risk heuristics"),
+    "POST /v1/token-risk": ("$0.05", "Token risk by address: honeypot verdict, transfer tax, owner privileges"),
 }
 
 FREE_TIER_DAILY = 10
 RATE_LIMIT_PER_MIN = 10
+PAID_DAILY_CAP_USD = 10  # AGENTS.md contract: $10/day per-payer approximation
 
 # Bazaar discovery declarations per route (CDP Bazaar: Python is opt-in —
 # every discoverable route must declare its metadata explicitly). Schema +
@@ -147,6 +149,21 @@ ROUTE_BAZAAR: dict[str, dict] = {
         },
         body_type="json",
         output=OutputConfig(example={"verdict": "looks_ok", "score": 0.0, "findings": []}),
+    ),
+    "POST /v1/token-risk": declare_discovery_extension(
+        input={"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
+        input_schema={
+            "properties": {"address": {"type": "string", "description": "Token contract address to analyze"}},
+            "required": ["address"],
+        },
+        body_type="json",
+        output=OutputConfig(
+            example={
+                "verdict": "review",
+                "notes": ["Transfer tax: 3.5%"],
+                "findings": [{"id": "token:transfer-tax", "severity": "medium"}],
+            }
+        ),
     ),
     "POST /v1/address-risk": declare_discovery_extension(
         input={"address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"},
@@ -261,6 +278,7 @@ class UsageTracker:
 
     def __init__(self) -> None:
         self._free_day: dict[str, tuple[str, int]] = {}
+        self._paid_day: dict[str, tuple[str, float]] = {}
         self._window: dict[str, deque[float]] = defaultdict(deque)
         self._last_flush = 0.0
         self._usage_file = None
@@ -351,6 +369,22 @@ class UsageTracker:
         q.append(now)
         return True
 
+    def paid_today_usd(self, ident: str) -> float:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day, usd = self._paid_day.get(ident, (today, 0.0))
+        return usd if day == today else 0.0
+
+    def record_paid_usd(self, ident: str, usd: float) -> None:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day, usd_sofar = self._paid_day.get(ident, (today, 0.0))
+        if day != today:
+            usd_sofar = 0.0
+        self._paid_day[ident] = (today, usd_sofar + usd)
+        self._maybe_flush()
+
+    def allow_paid_today(self, ident: str, usd_requested: float) -> bool:
+        return self.paid_today_usd(ident) + usd_requested <= PAID_DAILY_CAP_USD
+
 
 usage = UsageTracker()
 
@@ -388,6 +422,11 @@ def _payment_required_response(
     body = payment_required.model_dump(mode="json", by_alias=True, exclude_none=True)
     encoded = safe_base64_encode(
         payment_required.model_dump_json(by_alias=True, exclude_none=True)
+    )
+    body = dict(body)
+    body["hint"] = (
+        "First 10 calls/day are free: retry with header 'X-Preflight-Free: trial'. "
+        "Payment: USDC on Base via x402 — retry with the PAYMENT-SIGNATURE header."
     )
     return JSONResponse(
         status_code=402,
@@ -487,6 +526,15 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
         collector.record_rate_limited()
         return JSONResponse(status_code=429, content={"error": "rate limit: 10 req/min"})
+    price_usd = _route_amount(route) / 1_000_000
+    if not usage.allow_paid_today(payer, price_usd):
+        from fastapi.responses import JSONResponse
+
+        collector.record_rate_limited()
+        return JSONResponse(
+            status_code=429,
+            content={"error": f"daily cap reached: ${PAID_DAILY_CAP_USD}/day per payer"},
+        )
 
     request.state.pf_paid = True
     response = await call_next(request)
@@ -515,6 +563,7 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
             # facilitator settle responses may omit `amount` or report it
             # inconsistently. Our own ROUTE_PRICES is what the 402 charged.
             amount = _route_amount(route)
+            usage.record_paid_usd(settled.payer or ident, amount / 1_000_000)
             collector.record_settle(route, amount, settled.payer, agent=ident)
             from preflight.notify.discord import notify_sale
 

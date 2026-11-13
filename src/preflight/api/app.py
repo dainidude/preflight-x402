@@ -29,10 +29,14 @@ from preflight.types import (
     ScanRequest,
     SimReport,
     SimRequest,
+    TokenRiskRequest,
 )
 
 app = FastAPI(title="Preflight Security API", version="0.1.0")
 app.include_router(metrics_router)
+from preflight.api.discovery import router as discovery_router  # noqa: E402
+
+app.include_router(discovery_router)
 
 _cache = LRUCache(maxsize=512, ttl=3600)
 
@@ -40,6 +44,7 @@ _cache = LRUCache(maxsize=512, ttl=3600)
 _run_analysis: Any = None
 _run_analysis_project: Any = None
 _run_simulation: Any = None
+_token_risk: Any = None
 
 
 def _get_run_analysis() -> Any:
@@ -58,6 +63,15 @@ def _get_run_analysis_project() -> Any:
 
         _run_analysis_project = run_analysis_project
     return _run_analysis_project
+
+
+def _get_token_risk() -> Any:
+    global _token_risk
+    if _token_risk is None:
+        from preflight.core.token_risk import run_token_risk
+
+        _token_risk = run_token_risk
+    return _token_risk
 
 
 def _get_run_simulation() -> Any:
@@ -131,9 +145,8 @@ async def llms_txt() -> Response:
     return _serve_public("llms.txt")
 
 
-@app.get("/.well-known/x402.json")
-async def x402_well_known() -> Response:
-    return _serve_public(".well-known/x402.json", media_type="application/json")
+# /.well-known/x402.json is served by the GENERATED discovery router
+# (api/discovery.py) — prices/payment fields derive from code, no drift.
 
 
 @app.get("/.well-known/x402")
@@ -212,6 +225,22 @@ async def sim_transaction(request: SimRequest, raw: Request) -> Response:
     return _finalize_sim(report, "POST /v1/sim", raw)
 
 
+@app.post("/v1/token-risk")
+async def token_risk(request: TokenRiskRequest, raw: Request) -> Response:
+    """Token risk by address — honeypot, tax, owner privileges. $0.05 via x402."""
+    try:
+        report: ScanReport = await _call_core(_get_token_risk(), request.address)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    return _finalize(
+        report,
+        route="POST /v1/token-risk",
+        paid=getattr(raw.state, "pf_paid", False),
+        agent=getattr(raw.state, "pf_agent", None),
+        cache_key=f"token-risk:{request.address.lower()}",
+    )
+
+
 @app.post("/v1/sim/deep")
 async def sim_deep(request: SimRequest, raw: Request) -> Response:
     """Deep transaction simulation (anvil fork) — $0.25 via x402."""
@@ -241,8 +270,15 @@ def _finalize_sim(report: SimReport, route: str, raw: Request) -> Response:
 
 @app.post("/v1/address-risk")
 def address_risk(request: AddressRiskRequest, raw: Request) -> Response:
-    """Static address risk heuristics — $0.005 via x402."""
+    """Address risk — checksum, contract-vs-EOA, basic bytecode flags. $0.005 via x402.
+
+    P1.2 honesty upgrade: a valid checksum alone is not a product. When RPC_URL
+    is configured, we check whether the address is a contract, whether it is a
+    minimal proxy, and note selfdestruct reachability — without ever claiming
+    more than was checked.
+    """
     findings: list[Finding] = []
+    notes: list[str] = []
     addr = request.address
 
     try:
@@ -254,12 +290,49 @@ def address_risk(request: AddressRiskRequest, raw: Request) -> Response:
             Finding(
                 id="invalid-checksum",
                 title="Invalid address format",
-                severity="low",
+                severity="medium",
                 confidence=1.0,
-                description="Address is not a valid EIP-55 checksum address.",
+                description="Address is not a valid EIP-55 checksum address — no on-chain checks were possible.",
                 detector="heuristic:validation",
             )
         )
+    else:
+        rpc = config().rpc_url
+        if rpc:
+            try:
+                w3 = Web3(Web3.HTTPProvider(rpc))
+                code = w3.eth.get_code(Web3.to_checksum_address(addr)) or b""
+                if code:
+                    notes.append(f"Contract ({len(code)} bytes of deployed bytecode)")
+                    code_hex = code.hex()
+                    if "363d3d373d3d3d363d73" in code_hex or "3d3d3d3d" in code_hex[:200]:
+                        findings.append(
+                            Finding(
+                                id="address:minimal-proxy",
+                                title="Minimal proxy (EIP-1167-style clone)",
+                                severity="low",
+                                confidence=0.7,
+                                description="Bytecode looks like a minimal proxy/clone; the logic lives at another address — check the implementation.",
+                                detector="heuristic:bytecode",
+                            )
+                        )
+                    if "715018a6" in code_hex:
+                        findings.append(
+                            Finding(
+                                id="address:selfdestruct-selector",
+                                title="Self-destruct selector present in bytecode",
+                                severity="medium",
+                                confidence=0.5,
+                                description="A kill/selfdestruct selector is reachable in the bytecode; verify it is owner-gated before trusting this contract.",
+                                detector="heuristic:bytecode",
+                            )
+                        )
+                else:
+                    notes.append("EOA — no deployed code at this address")
+            except Exception as exc:
+                notes.append(f"On-chain checks unavailable (RPC error: {str(exc)[:80]})")
+        else:
+            notes.append("On-chain checks skipped: RPC_URL not configured")
 
     # Same severity rule as core scoring: critical/high → block, medium → review.
     severities = {f.severity for f in findings}
@@ -276,6 +349,8 @@ def address_risk(request: AddressRiskRequest, raw: Request) -> Response:
         checked_at=_now(),
     )
     body = report.model_dump(mode="json")
+    if notes:
+        body["notes"] = notes
     body["attestation"] = sign_report(body)
     from preflight.api.metrics import collector
 
@@ -292,13 +367,18 @@ def _run_sync(func: Any, *args: Any) -> Any:
 
 
 async def _call_core(func: Any, *args: Any) -> ScanReport:
-    """Call the core pipeline whether it is sync or async (hermes made it async)."""
+    """Call the core pipeline without blocking the event loop.
+
+    Sync (CPU-bound) callables run in a worker thread — a slow Slither scan
+    must never stall /health or the heartbeat (IMPROVEMENT_SPEC P0.1). Async
+    callables are awaited directly.
+    """
+    import asyncio
     import inspect
 
-    result = func(*args)
-    if inspect.iscoroutine(result):
-        result = await result
-    return result
+    if inspect.iscoroutinefunction(func):
+        return await func(*args)
+    return await asyncio.to_thread(func, *args)
 
 
 def _finalize(
@@ -339,6 +419,7 @@ _PAID_PATHS: dict[str, str] = {  # path -> USD amount
     "/v1/sim/deep": "0.25",
     "/v1/scan/project": "0.10",
     "/v1/address-risk": "0.005",
+    "/v1/token-risk": "0.05",
 }
 
 
@@ -362,8 +443,10 @@ def _openapi_with_x402() -> dict[str, Any]:
         "($0.005). Each POST returns HTTP 402 with payment requirements; pay "
         "via the x402 protocol (USDC, Base) and retry with the PAYMENT-SIGNATURE "
         "header to receive a severity-scored, EIP-712-attested verdict: "
-        "looks_ok | review | block. First 10 scans/day are free with the "
-        "X-Preflight-Free: trial header. Full service description at /llms.txt."
+        "looks_ok | review | block. Trading agents: POST a token address to "
+        "/v1/token-risk ($0.05) for a honeypot verdict, transfer tax %, and owner-privilege "
+        "checks. First 10 calls/day are free with the X-Preflight-Free: trial header. "
+        "Full service description at /llms.txt."
     )
 
     for path, methods in schema.get("paths", {}).items():

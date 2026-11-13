@@ -145,3 +145,40 @@ Network-marked deep test also passes (Base mainnet fork via anvil).
 
 ### Cross-area requests
 - None.
+---
+
+# Wave 4 — P0 trust fixes in core
+
+## P0.1 — Un-block the event loop
+- `src/preflight/core/pipeline.py`: `run_analysis` is now a synchronous function.
+- `src/preflight/core/project.py`: `run_analysis_project` is now a synchronous function.
+- Added `threading.Semaphore(3)` (`_SCAN_SLOTS`) in `pipeline.py` and acquired it around slither/solc work in both functions so bursts queue instead of exhausting the container.
+- Updated `tests/test_core_pipeline.py`, `tests/test_core_false_positive.py`, and `tests/test_core_detector_edgecases.py` to call the sync functions directly.
+
+## P0.2 — Honeypot pausable downgrade
+- Tuned `src/preflight/core/detectors/custom.py` so standalone owner-controlled pausability is `medium` (verdict `review`).
+- Pausability escalates to `high` only when combined with a second owner-controlled transfer-restriction signal:
+  - blacklist/allowlist mapping with owner-only mutators,
+  - `_beforeTokenTransfer` gating on owner/blacklist,
+  - owner-only fee/tax setters without a cap.
+- Added fixtures:
+  - `tests/fixtures/clean_pausable_oz.sol` — standalone pausable, expected `review`.
+  - `tests/fixtures/honeypot_pausable_blacklist.sol` — pausable + blacklist, expected `block`.
+- Updated tests in `tests/test_core_pipeline.py` and `tests/test_core_false_positive.py` to assert the new severity-level behavior.
+
+## P0.3 — Score dilution fix
+- Rewrote `calculate_score` in `src/preflight/core/scoring.py`:
+  - Base score is the max-severity finding (critical 95, high 80, medium 50, low 20, info 5).
+  - Additional findings add diminishing contributions (`weight / (rank + 1)`).
+  - Total is capped at 99 so many low findings cannot mask a critical.
+- Added regression tests ensuring a critical alone scores ≥ 90 and a critical plus 10 infos stays ≥ 90.
+- Updated existing scoring tests for the new scale.
+
+## Test results
+```bash
+uv run pytest tests/ -m "not network" -q
+```
+- **166 passed, 6 deselected (network), 1 warning**
+
+## Cross-area requests
+- None.

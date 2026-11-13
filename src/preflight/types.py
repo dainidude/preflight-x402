@@ -77,6 +77,7 @@ class AddressRiskReport(BaseModel):
     address: str
     findings: list[Finding] = Field(default_factory=list)
     checked_at: str
+    notes: list[str] = Field(default_factory=list, description="What was (and was not) checked on-chain")
     attestation: dict[str, Any] | None = None
 
 
@@ -121,3 +122,14 @@ class SimReport(BaseModel):
     simulator: str = Field(description="e.g. 'rpc-ethcall:v1' or 'anvil-fork:v1'")
     attestation: dict[str, Any] | None = None
     notes: list[str] = Field(default_factory=list)
+
+
+class TokenRiskRequest(BaseModel):
+    """Body of POST /v1/token-risk — the trading-agent pivot route ($0.05).
+
+    Analyze a token by ADDRESS (no source needed): honeypot verdict via the
+    fork probe, transfer tax %, contract sanity, bytecode owner-privilege
+    heuristics. Returns the same attested ScanReport shape.
+    """
+
+    address: str = Field(min_length=42, max_length=42, description="Token contract address")

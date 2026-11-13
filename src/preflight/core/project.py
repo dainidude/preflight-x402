@@ -12,7 +12,7 @@ from preflight.core.detectors import DetectorContext, run_all_custom_detectors
 from preflight.core.report import build_scan_report
 from preflight.types import Finding, ScanReport
 
-from .pipeline import _get_solc_binary_path, _parse_slither_json
+from .pipeline import _SCAN_SLOTS, _get_solc_binary_path, _parse_slither_json
 
 
 def _run_slither_on_project(
@@ -80,7 +80,7 @@ def _run_slither_on_project(
     return findings, note
 
 
-async def run_analysis_project(
+def run_analysis_project(
     files: dict[str, str],
     contract_name: str | None = None,
     solc_version: str | None = None,
@@ -93,63 +93,68 @@ async def run_analysis_project(
     if not files:
         raise ValueError("No files provided for project analysis")
 
-    # Auto-detect solc version if not provided
-    if solc_version is None:
-        # Use first file's pragma
-        first_source = list(files.values())[0]
-        from .pipeline import _extract_pragma_version, _ensure_solc_installed
-        pragma = _extract_pragma_version(first_source)
-        if pragma:
-            solc_version = _ensure_solc_installed(pragma)
+    # Serialize heavy slither/solc work to protect the event loop from bursts.
+    with _SCAN_SLOTS:
+        # Auto-detect solc version if not provided
+        if solc_version is None:
+            # Use first file's pragma
+            first_source = list(files.values())[0]
+            from .pipeline import _extract_pragma_version, _ensure_solc_installed
+            pragma = _extract_pragma_version(first_source)
+            if pragma:
+                solc_version = _ensure_solc_installed(pragma)
+            else:
+                solc_version = "0.8.20"
         else:
-            solc_version = "0.8.20"
+            from .pipeline import _ensure_solc_installed
+            solc_version = _ensure_solc_installed(solc_version)
 
-    # Determine the main file (first one, or the one matching contract_name)
-    main_file = list(files.keys())[0]
-    if contract_name:
-        for fname, fsource in files.items():
-            if f"contract {contract_name}" in fsource:
-                main_file = fname
-                break
+        # Determine the main file (first one, or the one matching contract_name)
+        main_file = list(files.keys())[0]
+        if contract_name:
+            for fname, fsource in files.items():
+                if f"contract {contract_name}" in fsource:
+                    main_file = fname
+                    break
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir_path = Path(tmpdir)
-        
-        # Write all files to temp directory
-        for fname, fsource in files.items():
-            file_path = tmpdir_path / fname
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(fsource, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
 
-        # Run slither on the main file with all project files available
-        slither_findings, slither_note = _run_slither_on_project(
-            main_file, solc_version, tmpdir_path
-        )
+            # Write all files to temp directory
+            for fname, fsource in files.items():
+                file_path = tmpdir_path / fname
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(fsource, encoding="utf-8")
 
-        # Run custom detectors on combined source (for cross-file patterns)
-        combined_source = "\n\n".join(
-            f"// File: {fname}\n{fsource}"
-            for fname, fsource in sorted(files.items())
-        )
-        custom_findings = run_all_custom_detectors(
-            DetectorContext(
-                source=combined_source,
-                lines=combined_source.splitlines(),
-                contract_name=contract_name,
-                solc_version=solc_version,
+            # Run slither on the main file with all project files available
+            slither_findings, slither_note = _run_slither_on_project(
+                main_file, solc_version, tmpdir_path
             )
-        )
 
-        notes = [slither_note] if slither_note else []
-
-        # Build report
-        report = build_scan_report(
+    # Run custom detectors on combined source (for cross-file patterns)
+    combined_source = "\n\n".join(
+        f"// File: {fname}\n{fsource}"
+        for fname, fsource in sorted(files.items())
+    )
+    custom_findings = run_all_custom_detectors(
+        DetectorContext(
             source=combined_source,
-            slither_findings=slither_findings,
-            custom_findings=custom_findings,
+            lines=combined_source.splitlines(),
             contract_name=contract_name,
             solc_version=solc_version,
-            notes=notes,
         )
+    )
+
+    notes = [slither_note] if slither_note else []
+
+    # Build report
+    report = build_scan_report(
+        source=combined_source,
+        slither_findings=slither_findings,
+        custom_findings=custom_findings,
+        contract_name=contract_name,
+        solc_version=solc_version,
+        notes=notes,
+    )
 
     return report

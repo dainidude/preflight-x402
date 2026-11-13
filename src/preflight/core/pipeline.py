@@ -12,8 +12,14 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
+
+# Concurrency limit for slither/solc heavy work so bursts queue instead of
+# exhausting the container.
+_SCAN_SLOTS = threading.Semaphore(3)
+
 
 import solcx
 
@@ -293,7 +299,7 @@ def _run_custom_detectors(source: str, contract_name: str | None, solc_version: 
     return run_all_custom_detectors(ctx)
 
 
-async def run_analysis(
+def run_analysis(
     source: str,
     contract_name: str | None = None,
     solc_version: str | None = None,
@@ -311,19 +317,21 @@ async def run_analysis(
     if not source or not source.strip():
         raise ValueError("Empty source code provided")
 
-    # Auto-detect solc version from pragma if not provided
-    if solc_version is None:
-        pragma = _extract_pragma_version(source)
-        if pragma:
-            solc_version = _ensure_solc_installed(pragma)
+    # Serialize heavy slither/solc work to protect the event loop from bursts.
+    with _SCAN_SLOTS:
+        # Auto-detect solc version from pragma if not provided
+        if solc_version is None:
+            pragma = _extract_pragma_version(source)
+            if pragma:
+                solc_version = _ensure_solc_installed(pragma)
+            else:
+                solc_version = PREINSTALLED_SOLC[-1]
         else:
-            solc_version = PREINSTALLED_SOLC[-1]
-    else:
-        # Ensure the specified version is available
-        solc_version = _ensure_solc_installed(solc_version)
+            # Ensure the specified version is available
+            solc_version = _ensure_solc_installed(solc_version)
 
-    # Run Slither analysis
-    slither_findings, slither_note = _run_slither_on_source(source, solc_version)
+        # Run Slither analysis
+        slither_findings, slither_note = _run_slither_on_source(source, solc_version)
 
     # Run custom detectors
     custom_findings = _run_custom_detectors(source, contract_name, solc_version)

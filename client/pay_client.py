@@ -12,6 +12,8 @@ Routes (``--route``):
   internal calls (same body as ``sim``; ``--deep`` upgrades ``--route sim``)
 * ``project`` — ``POST /v1/scan/project`` ($0.10), body ``{files, contract_name?}``
 * ``address-risk`` — ``POST /v1/address-risk`` ($0.005), body ``{address}``
+* ``token-risk`` — ``POST /v1/token-risk`` ($0.05), body ``{address}``; honeypot,
+  transfer tax, and owner-privilege check for trading agents
 
 With ``--route sim`` (or ``sim-deep``) and no ``--to`` it runs a zero-argument
 demo: a 0-value ``transfer(address,uint256)`` call to the USDC contract for an
@@ -36,6 +38,7 @@ Usage:
     uv run python client/pay_client.py --route sim --deep   # same as sim-deep
     uv run python client/pay_client.py --route project --file A.sol --file B.sol
     uv run python client/pay_client.py --route address-risk --address 0x...
+    uv run python client/pay_client.py --route token-risk --address 0x...
     uv run python client/pay_client.py --key <api-key>   # optional key layer
 """
 
@@ -145,6 +148,7 @@ ROUTES: dict[str, Route] = {
     "sim-deep": Route("sim-deep", "/v1/sim/deep", "$0.25", "250000"),
     "project": Route("project", "/v1/scan/project", "$0.10", "100000"),
     "address-risk": Route("address-risk", "/v1/address-risk", "$0.005", "5000"),
+    "token-risk": Route("token-risk", "/v1/token-risk", "$0.05", "50000"),
 }
 DEFAULT_ROUTE = "scan"
 
@@ -292,6 +296,13 @@ def address_risk_payload(address: str) -> dict[str, Any]:
     return {"address": address}
 
 
+def token_risk_payload(address: str) -> dict[str, Any]:
+    """Body for ``POST /v1/token-risk`` (same ``{address}`` shape)."""
+    if not address.startswith("0x") or len(address) != 42:
+        raise ValueError(f"--address must be a 0x-prefixed 20-byte address: {address!r}")
+    return {"address": address}
+
+
 def build_payload(
     route: str,
     *,
@@ -315,6 +326,10 @@ def build_payload(
         return sim_payload(to, data, value_wei, from_address)
     if route == "sim-deep":
         return sim_payload(to, data, value_wei, from_address)
+    if route == "token-risk":
+        if address is None:
+            raise ValueError("--route token-risk requires --address")
+        return token_risk_payload(address)
     if address is None:
         raise ValueError("--route address-risk requires --address")
     return address_risk_payload(address)
@@ -652,7 +667,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--from-address", default=None, help="Simulation sender override (--route sim)."
     )
-    parser.add_argument("--address", default=None, help="Address to check (--route address-risk).")
+    parser.add_argument(
+        "--address",
+        default=None,
+        help="Address to check (--route address-risk or token-risk).",
+    )
     return parser.parse_args()
 
 

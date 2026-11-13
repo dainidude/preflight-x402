@@ -202,10 +202,11 @@ def _probe_honeypot_transfer(
         notes.append(f"Honeypot probe skipped: could not read target code ({exc})")
         return findings, notes
 
-    if not _looks_like_erc20(code_hex):
-        notes.append(
-            f"Honeypot probe skipped: {token_address} does not look like an ERC-20 token"
-        )
+    # Proxy-aware: most modern tokens are proxies whose bytecode hides ERC-20
+    # selectors behind delegatecall. Attempt the probe on ANY deployed code —
+    # the transfer calls themselves fail gracefully for non-tokens.
+    if not (code_hex and code_hex != "0x"):
+        notes.append(f"Honeypot probe skipped: no bytecode at {token_address}")
         return findings, notes
 
     holder = _random_address()

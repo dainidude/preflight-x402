@@ -227,3 +227,33 @@ uv run python client/pay_client.py --route sim --deep
   `*/*` gets HTML; client Accept/key/precedence tests.
 
 Full offline suite: **139 passed, 5 deselected**.
+
+## Wave 4 — generated discovery, token-risk surface
+
+- `src/preflight/api/discovery.py` — new `build_x402_discovery(cfg)` derives
+  resource/payment/pricing/endpoints/mcp from `ROUTE_PRICES` + `Config`; CDP
+  credentials select the Coinbase facilitator URL, otherwise the configured
+  public facilitator. Exports `router` with `GET /.well-known/x402.json`.
+  Static `public/.well-known/x402.json` regenerated from the same builder and
+  kept as the reference/fallback; test asserts generated == static.
+- `src/preflight/mcp/server.py` — `preflight_token_risk {address}` → POST
+  `/v1/token-risk`; Accept/key/dev headers, 402 and 401 ToolErrors, ScanReport
+  validation.
+- `client/pay_client.py` — `--route token-risk --address 0x…` (same `{address}`
+  body and $0.05 price).
+- `public/llms.txt` — token-risk route row, trading-agent paragraph, request
+  body, MCP tool; facilitator corrected to the CDP URL. `public/landing.html`
+  price table also lists token-risk.
+- Tests: generated discovery/payment/pricing/router/static-equality and
+  token-risk MCP/client routing/payload.
+
+Cross-area request for arbiter: remove the static `@app.get("/.well-known/
+x402.json")` handler from `src/preflight/api/app.py` and include the generated
+router instead:
+
+```python
+from preflight.api.discovery import router as discovery_router
+app.include_router(discovery_router)
+```
+
+Full offline suite: **161 passed, 6 deselected**.

@@ -246,6 +246,9 @@ def test_route_table_prices() -> None:
     assert pay_client.ROUTES["project"].amount_base_units == "100000"
     assert pay_client.ROUTES["address-risk"].path == "/v1/address-risk"
     assert pay_client.ROUTES["address-risk"].amount_base_units == "5000"
+    assert pay_client.ROUTES["token-risk"].path == "/v1/token-risk"
+    assert pay_client.ROUTES["token-risk"].price == "$0.05"
+    assert pay_client.ROUTES["token-risk"].amount_base_units == "50000"
 
 
 def test_erc20_transfer_calldata_encoding() -> None:
@@ -302,6 +305,15 @@ def test_sim_payload_rejects_bad_address_and_data() -> None:
         pay_client.sim_payload(to=PAY_TO, data="deadbeef")
 
 
+def test_token_risk_payload_shape() -> None:
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    assert pay_client.build_payload("token-risk", address=token) == {"address": token}
+    with pytest.raises(ValueError):
+        pay_client.build_payload("token-risk")
+    with pytest.raises(ValueError):
+        pay_client.build_payload("token-risk", address="0xnope")
+
+
 def test_build_payload_all_routes() -> None:
     assert pay_client.build_payload("scan", source="contract X {}") == {
         "source": "contract X {}"
@@ -312,11 +324,14 @@ def test_build_payload_all_routes() -> None:
     assert pay_client.build_payload("sim")["to"] == USDC
     assert pay_client.build_payload("sim-deep")["to"] == USDC
     assert pay_client.build_payload("address-risk", address=PAY_TO) == {"address": PAY_TO}
+    assert pay_client.build_payload("token-risk", address=PAY_TO) == {"address": PAY_TO}
     with pytest.raises(ValueError):
         pay_client.build_payload("address-risk")
 
 
-@pytest.mark.parametrize("route_name", ["sim", "sim-deep", "project", "address-risk"])
+@pytest.mark.parametrize(
+    "route_name", ["sim", "sim-deep", "project", "address-risk", "token-risk"]
+)
 def test_post_paid_route_amount_and_path(route_name: str) -> None:
     route = pay_client.ROUTES[route_name]
     seen: list[httpx.Request] = []

@@ -17,6 +17,7 @@
 | POST | `/v1/sim/deep` | $0.25 | x402 |
 | POST | `/v1/scan/project` | $0.10 | x402 |
 | POST | `/v1/address-risk` | $0.005 | x402 |
+| POST | `/v1/token-risk` | $0.05 | x402 |
 
 Free trial: send header `X-Preflight-Free: trial` to get your first 10
 scans/day free (opt-in; requests without the header are paywalled normally).
@@ -30,6 +31,11 @@ findings (a reverting call is a real finding, not a client error).
 measured `gas_used`, the sender's `balance_delta_wei`, and the `internal_calls`
 trace — use it for honeypot/MEV checks where a bare `eth_call` is not enough.
 
+`/v1/token-risk` is the trading-agent route: check a token before you trade it.
+Give the token contract address and get back a honeypot verdict, transfer tax
+percentage, and owner-privilege findings as a severity-scored `ScanReport`
+($0.05). It is address-first: no Solidity source or contract name needed.
+
 `/metrics` exposes revenue and usage counters (for example
 `revenue_base_units`) with no payment.
 
@@ -39,7 +45,8 @@ trace — use it for honeypot/MEV checks where a bare `eth_call` is not enough.
 - Asset: USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (6 decimals)
 - Scheme: `exact` (EIP-3009 transfer-with-authorization)
 - Pay to: `0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41`
-- Facilitator: `https://x402.org/facilitator`
+- Facilitator: `https://api.cdp.coinbase.com/platform/v2/x402` (Coinbase CDP;
+  `https://x402.org/facilitator` is the public fallback)
 
 A paid route responds `402 Payment Required` with a `PAYMENT-REQUIRED` header
 containing the x402 payment requirements. Retry the same request with a
@@ -90,6 +97,15 @@ transfer. `source` is optional Solidity source for static honeypot detectors.
 ```json
 {"address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"}
 ```
+
+`POST /v1/token-risk`:
+
+```json
+{"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"}
+```
+
+Returns the same `ScanReport` shape, with honeypot, transfer-tax, and owner
+privilege findings.
 
 ## Response (ScanReport)
 
@@ -194,11 +210,11 @@ curl -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/sim/deep 
 
 ## MCP
 
-An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01)
-and `preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep),
-plus free `preflight_pricing`. Set `mode: "deep"` to use `/v1/sim/deep`.
-Run it with `uv run python -m preflight.mcp.server` (stdio) or `--http` for
-streamable HTTP.
+An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01),
+`preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep), and
+`preflight_token_risk {address}` ($0.05), plus free `preflight_pricing`. Set
+`mode: "deep"` to use `/v1/sim/deep`. Run it with
+`uv run python -m preflight.mcp.server` (stdio) or `--http` for streamable HTTP.
 
 ## Dev mode
 

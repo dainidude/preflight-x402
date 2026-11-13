@@ -48,7 +48,7 @@ class DurableState:
                 temp_file.write_text(json.dumps(snapshot, indent=2, default=str))
                 # Atomic replace
                 temp_file.replace(self._state_file)
-            except (OSError, json.JSONEncodeError) as e:
+            except (OSError, TypeError, ValueError):
                 # Log error but don't crash the application
                 # In production, you might want to use proper logging
                 pass

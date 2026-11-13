@@ -102,3 +102,15 @@ def clean_reentrancyguard_vault() -> str:
 def clean_oracle_fresh() -> str:
     with open("tests/fixtures/clean_oracle_fresh.sol") as f:
         return f.read()
+
+
+@pytest.fixture
+def clean_pausable_oz() -> str:
+    with open("tests/fixtures/clean_pausable_oz.sol") as f:
+        return f.read()
+
+
+@pytest.fixture
+def honeypot_pausable_blacklist() -> str:
+    with open("tests/fixtures/honeypot_pausable_blacklist.sol") as f:
+        return f.read()

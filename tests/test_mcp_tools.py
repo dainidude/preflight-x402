@@ -161,6 +161,39 @@ async def test_preflight_sim_lists_as_tool(monkeypatch: pytest.MonkeyPatch) -> N
     assert {"preflight_check", "preflight_sim", "preflight_pricing"} <= names
 
 
+async def test_preflight_token_risk_tool_returns_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+    async def fake_token_risk(address: str) -> dict[str, Any]:
+        assert address == token
+        return REPORT
+
+    monkeypatch.setattr(mcp_server, "token_risk", fake_token_risk)
+    server = create_server()
+    result = await server.call_tool("preflight_token_risk", {"address": token})
+    data = json.loads(await _text(result))
+    assert data["verdict"] == "block"
+    assert data["findings"][0]["severity"] == "critical"
+
+
+async def test_preflight_token_risk_lists_as_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_token_risk(address: str) -> dict[str, Any]:
+        return REPORT
+
+    monkeypatch.setattr(mcp_server, "token_risk", fake_token_risk)
+    server = create_server()
+    tools = await server.list_tools()
+    names = {tool.name for tool in tools}
+    assert {
+        "preflight_check",
+        "preflight_sim",
+        "preflight_token_risk",
+        "preflight_pricing",
+    } <= names
+
+
 class _FakeResponse:
     def __init__(self, status_code: int, json_data: Any, headers: dict[str, str] | None = None) -> None:
         self.status_code = status_code
@@ -365,6 +398,35 @@ async def test_simulate_transaction_rejects_unknown_mode(
         await mcp_server.simulate_transaction(SIM_REPORT["to"], mode="turbo")
 
 
+async def test_token_risk_posts_address_with_accept_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    fake = _FakeAsyncClient(_FakeResponse(200, REPORT))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=True))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    result = await mcp_server.token_risk(token)
+    assert result["verdict"] == "block"
+    assert fake.last_url.endswith("/v1/token-risk")
+    assert fake.last_json == {"address": token}
+    assert fake.last_headers.get("Accept") == "application/json"
+    assert fake.last_headers.get("X-Preflight-Dev") == "bypass"
+
+
+async def test_token_risk_402_names_price_and_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(402, {"error": "Payment required"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    with pytest.raises(mcp_server.ToolError) as excinfo:
+        await mcp_server.token_risk("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    assert "$0.05" in str(excinfo.value)
+    assert "--route token-risk" in str(excinfo.value)
+
+
 async def test_simulate_transaction_402_raises_actionable_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -418,7 +480,7 @@ def test_x402_discovery_real_values() -> None:
     assert payment["network"] == "base"
     assert payment["asset"] == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     assert payment["scheme"] == "exact"
-    assert payment["facilitator"] == "https://x402.org/facilitator"
+    assert payment["facilitator"] == "https://api.cdp.coinbase.com/platform/v2/x402"
 
     assert doc["pricing"]["POST /v1/scan"]["price"] == "$0.01"
     assert doc["pricing"]["POST /v1/scan"]["amount"] == "10000"
@@ -435,6 +497,8 @@ def test_x402_discovery_real_values() -> None:
     assert doc["pricing"]["POST /v1/scan/project"]["amount"] == "100000"
     assert doc["pricing"]["POST /v1/address-risk"]["price"] == "$0.005"
     assert doc["pricing"]["POST /v1/address-risk"]["amount"] == "5000"
+    assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.05"
+    assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
     for route in doc["pricing"].values():
         assert route["network"] == "eip155:8453"
         assert route["asset"] == payment["asset"]
@@ -450,6 +514,7 @@ def test_x402_discovery_bazaar_extensions() -> None:
         "POST /v1/sim/deep",
         "POST /v1/scan/project",
         "POST /v1/address-risk",
+        "POST /v1/token-risk",
     ):
         extension = bazaar[route]
         assert extension["info"]["input"]["type"] == "http"
@@ -474,6 +539,7 @@ def test_llms_txt_documents_new_surface() -> None:
     text = (root / "llms.txt").read_text(encoding="utf-8")
     assert "/v1/sim" in text
     assert "/v1/sim/deep" in text
+    assert "/v1/token-risk" in text
     assert "$0.25" in text
     assert "anvil" in text
     assert "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" in text

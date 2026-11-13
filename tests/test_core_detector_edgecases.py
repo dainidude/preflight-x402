@@ -11,8 +11,8 @@ from preflight.types import Verdict
 class TestInterfaceAndAbstractSources:
     """Detectors must not false-positive on interface/abstract declarations."""
 
-    @pytest.mark.asyncio
-    async def test_interface_only_no_medium_findings(self):
+    
+    def test_interface_only_no_medium_findings(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -26,13 +26,13 @@ interface IToken {
     function pause() external;
 }
 """
-        report = await run_analysis(source)
+        report = run_analysis(source)
         medium_or_high = [f for f in report.findings if f.severity in ("medium", "high")]
         assert len(medium_or_high) == 0
         assert report.verdict == "looks_ok"
 
-    @pytest.mark.asyncio
-    async def test_abstract_virtual_function_no_false_positive(self):
+    
+    def test_abstract_virtual_function_no_false_positive(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -42,7 +42,7 @@ abstract contract BaseOracle {
     function initialize(address _owner) external virtual;
 }
 """
-        report = await run_analysis(source)
+        report = run_analysis(source)
         custom_findings = [f for f in report.findings if f.detector.startswith("custom:")]
         # No custom medium/high findings from declarations.
         assert all(f.severity in ("low", "info") for f in custom_findings)
@@ -51,19 +51,19 @@ abstract contract BaseOracle {
 class TestEmptyAndMinimalSources:
     """Minimal sources should not crash or false-positive."""
 
-    @pytest.mark.asyncio
-    async def test_empty_contract_looks_ok(self):
+    
+    def test_empty_contract_looks_ok(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 contract Empty {}
 """
-        report = await run_analysis(source, contract_name="Empty")
+        report = run_analysis(source, contract_name="Empty")
         assert report.verdict == "looks_ok"
 
-    @pytest.mark.asyncio
-    async def test_multiple_pragmas_picks_first(self):
+    
+    def test_multiple_pragmas_picks_first(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0;
@@ -73,7 +73,7 @@ contract MultiPragma {
     uint256 public value;
 }
 """
-        report = await run_analysis(source, contract_name="MultiPragma")
+        report = run_analysis(source, contract_name="MultiPragma")
         assert report.solc_version is not None
         assert report.verdict == "looks_ok"
 
@@ -81,8 +81,8 @@ contract MultiPragma {
 class TestSolcVersionRobustness:
     """Unbounded / edge pragmas should resolve to a sane pinned version."""
 
-    @pytest.mark.asyncio
-    async def test_unbounded_gte_pragma(self):
+    
+    def test_unbounded_gte_pragma(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0;
@@ -91,12 +91,12 @@ contract Unbounded {
     uint256 public x;
 }
 """
-        report = await run_analysis(source, contract_name="Unbounded")
+        report = run_analysis(source, contract_name="Unbounded")
         assert report.solc_version is not None
         assert report.verdict == "looks_ok"
 
-    @pytest.mark.asyncio
-    async def test_caret_pragma(self):
+    
+    def test_caret_pragma(self):
         source = """
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -105,5 +105,5 @@ contract Caret {
     uint256 public x;
 }
 """
-        report = await run_analysis(source, contract_name="Caret")
+        report = run_analysis(source, contract_name="Caret")
         assert report.solc_version in ("0.8.20", "0.8.24", "0.8.26")

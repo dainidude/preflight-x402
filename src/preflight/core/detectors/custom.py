@@ -405,23 +405,54 @@ def detect_missing_zero_address_checks(ctx: DetectorContext) -> list[Finding]:
     return findings
 
 
+def _function_body(lines: list[str], start_line: int) -> str:
+    """Return the body of the function starting at start_line, or empty string."""
+    open_line = None
+    open_col = -1
+    for j in range(start_line, min(len(lines), start_line + 5)):
+        if "{" in lines[j]:
+            open_line = j
+            open_col = lines[j].index("{")
+            break
+    if open_line is None:
+        return ""
+
+    depth = 1
+    parts: list[str] = [lines[open_line][open_col + 1 :]]
+    for j in range(open_line + 1, len(lines)):
+        line = lines[j]
+        for k, ch in enumerate(line):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    parts.append(line[:k])
+                    return "\n".join(parts)
+        parts.append(line)
+    return "\n".join(parts)
+
+
 def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
     """Detect honeypot patterns: owner can pause/blacklist transfers.
 
-    Patterns:
-    - pause() / unpause() with transfer restrictions
-    - blacklist / whitelist mappings for addresses
-    - _beforeTokenTransfer hooks with owner-controlled logic
-    - transferFrom/transfer with role checks that owner controls
+    Downgrade standalone pausability to medium.  Pausable becomes high only
+    when combined with a second owner-controlled transfer-restriction signal:
+    blacklist/allowlist mapping with owner-only mutators, _beforeTokenTransfer
+    gating on owner, or fee setters without caps.
     """
-    findings = []
+    findings: list[Finding] = []
     lines = ctx.lines
     source_lower = ctx.source.lower()
 
-    # Check for Pausable with transfer restrictions
-    has_pausable = "pausable" in source_lower or "whennotpaused" in source_lower
+    has_pausable = (
+        "pausable" in source_lower
+        or "whennotpaused" in source_lower
+        or "whenpaused" in source_lower
+    )
+    pause_findings: list[Finding] = []
+
     if has_pausable:
-        # Check if pause is owner-only or has broad control
         for i, line in enumerate(lines):
             if (
                 _inside_interface(ctx, i)
@@ -430,52 +461,79 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
             ):
                 continue
             if "function pause" in line.lower() or "function unpause" in line.lower():
-                context = " ".join(lines[max(0, i - 2) : min(len(lines), i + 5)]).lower()
+                context = " ".join(
+                    lines[max(0, i - 2) : min(len(lines), i + 5)]
+                ).lower()
                 if "onlyowner" in context or "onlyrole" in context:
                     snippet = _extract_snippet(lines, i)
-                    findings.append(
-                        _make_finding(
-                            detector_name="honeypot",
-                            finding_id=f"pause-{len(findings)}",
-                            title="Owner-controlled pause can block transfers",
-                            severity="high",
-                            confidence=0.8,
-                            description="Contract uses Pausable with owner-only pause/unpause; transfers can be blocked arbitrarily",
-                            snippet=snippet,
-                            line_no=i,
-                            reference="https://github.com/ethereum/EIPs/blob/master/EIPS/eip-20.md#transfer",
-                        )
+                    finding = _make_finding(
+                        detector_name="honeypot",
+                        finding_id=f"pause-{len(findings)}",
+                        title="Owner-controlled pause can block transfers",
+                        severity="medium",
+                        confidence=0.8,
+                        description="Contract uses Pausable with owner-only pause/unpause; transfers can be blocked arbitrarily",
+                        snippet=snippet,
+                        line_no=i,
+                        reference="https://github.com/ethereum/EIPs/blob/master/EIPS/eip-20.md#transfer",
                     )
+                    findings.append(finding)
+                    pause_findings.append(finding)
 
-    # Check for blacklist/whitelist mappings
+    # Check for blacklist/whitelist mappings with owner-only mutators.
     blacklist_patterns = [
         r"mapping\s*\(\s*address\s*=>\s*bool\s*\)\s+(?:public\s+)?(?:is)?(?:blacklist|blocked|banned|frozen)",
         r"mapping\s*\(\s*address\s*=>\s*bool\s*\)\s+(?:public\s+)?(?:is)?(?:whitelist|allowed|approved)",
         r"(?:blacklist|whitelist)\s*\[",
     ]
+    has_owner_list_mutator = False
+    for i, line in enumerate(lines):
+        if _inside_interface(ctx, i) or _is_comment_line(line):
+            continue
+        line_lower = line.lower()
+        if "function" in line_lower and (
+            "blacklist" in line_lower
+            or "whitelist" in line_lower
+            or "blocked" in line_lower
+            or "frozen" in line_lower
+        ):
+            body = _function_body(lines, i)
+            sig_context = " ".join(
+                lines[i : min(len(lines), i + 5)]
+            ).lower()
+            context = (sig_context + " " + body).lower()
+            if (
+                "onlyowner" in context
+                or "onlyrole" in context
+                or "require(msg.sender==owner" in context.replace(" ", "")
+            ):
+                has_owner_list_mutator = True
 
+    second_signals: list[Finding] = []
     for pattern in blacklist_patterns:
         matches = list(re.finditer(pattern, source_lower))
         for m in matches:
             line_no = ctx.source[: m.start()].count("\n")
             if _inside_interface(ctx, line_no) or _is_comment_line(ctx.lines[line_no]):
                 continue
+            if not has_owner_list_mutator:
+                continue
             snippet = _extract_snippet(ctx.lines, line_no)
-            findings.append(
-                _make_finding(
-                    detector_name="honeypot",
-                    finding_id=f"list-{len(findings)}",
-                    title="Address blacklist/whitelist controls transfers",
-                    severity="high",
-                    confidence=0.75,
-                    description="Contract maintains address allow/block list that can restrict transfers",
-                    snippet=snippet,
-                    line_no=line_no,
-                    reference="https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/restrict-token-transfers/",
-                )
+            finding = _make_finding(
+                detector_name="honeypot",
+                finding_id=f"list-{len(findings)}",
+                title="Address blacklist/whitelist controls transfers",
+                severity="high",
+                confidence=0.75,
+                description="Contract maintains owner-controlled allow/block list that can restrict transfers",
+                snippet=snippet,
+                line_no=line_no,
+                reference="https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/restrict-token-transfers/",
             )
+            findings.append(finding)
+            second_signals.append(finding)
 
-    # Check for _beforeTokenTransfer with owner logic
+    # Check for _beforeTokenTransfer with owner-controlled logic.
     for i, line in enumerate(lines):
         if (
             _inside_interface(ctx, i)
@@ -487,18 +545,85 @@ def detect_honeypot_patterns(ctx: DetectorContext) -> list[Finding]:
             context = " ".join(lines[i : min(len(lines), i + 20)]).lower()
             if "owner" in context or "onlyowner" in context or "blacklist" in context:
                 snippet = _extract_snippet(lines, i, radius=10)
-                findings.append(
-                    _make_finding(
-                        detector_name="honeypot",
-                        finding_id=f"hook-{len(findings)}",
-                        title="_beforeTokenTransfer with owner-controlled logic",
-                        severity="high",
-                        confidence=0.85,
-                        description="Transfer hook contains owner-controlled restrictions (pause, blacklist, etc.)",
-                        snippet=snippet,
-                        line_no=i,
-                    )
+                finding = _make_finding(
+                    detector_name="honeypot",
+                    finding_id=f"hook-{len(findings)}",
+                    title="_beforeTokenTransfer with owner-controlled logic",
+                    severity="high",
+                    confidence=0.85,
+                    description="Transfer hook contains owner-controlled restrictions (pause, blacklist, etc.)",
+                    snippet=snippet,
+                    line_no=i,
                 )
+                findings.append(finding)
+                second_signals.append(finding)
+
+    # Owner-controlled fee setters without caps are a second signal.
+    fee_setter_findings = _detect_owner_fee_setter_without_cap(ctx)
+    findings.extend(fee_setter_findings)
+    second_signals.extend(fee_setter_findings)
+
+    # Escalate standalone pause to high when a second restriction signal exists.
+    if pause_findings and second_signals:
+        for pf in pause_findings:
+            pf.severity = "high"
+            pf.title = "Owner-controlled pause combined with transfer restrictions"
+            pf.description = (
+                "Contract can pause transfers and has additional owner-controlled "
+                "restrictions (blacklist/allowlist, transfer hook, or uncapped fees)."
+            )
+
+    return findings
+
+
+def _detect_owner_fee_setter_without_cap(ctx: DetectorContext) -> list[Finding]:
+    """Detect owner-only fee/tax setters that lack a cap check."""
+    findings: list[Finding] = []
+    lines = ctx.lines
+    source_lower = ctx.source.lower()
+
+    for m in re.finditer(
+        r"function\s+(set[A-Za-z0-9_]*(?:fee|tax|feepercent|taxfee|liquidityfee|reflectfee|transferfee))\s*\(",
+        source_lower,
+    ):
+        i = ctx.source[: m.start()].count("\n")
+        if _inside_interface(ctx, i) or _is_comment_line(lines[i]):
+            continue
+
+        body = _function_body(lines, i)
+        sig_context = " ".join(lines[i : min(len(lines), i + 5)]).lower()
+        context = (sig_context + " " + body).lower()
+
+        owner_only = (
+            "onlyowner" in context
+            or "onlyrole" in context
+            or "require(msg.sender==owner" in context.replace(" ", "")
+        )
+        if not owner_only:
+            continue
+
+        has_cap = (
+            re.search(r"<=\s*\d", body) is not None
+            or re.search(r"require\s*\([^)]*<=", body, re.IGNORECASE) is not None
+            or "max" in body.lower()
+            or "cap" in body.lower()
+        )
+        if has_cap:
+            continue
+
+        snippet = _extract_snippet(lines, i)
+        findings.append(
+            _make_finding(
+                detector_name="honeypot",
+                finding_id=f"fee-setter-{len(findings)}",
+                title="Owner-controlled fee setter without cap",
+                severity="medium",
+                confidence=0.7,
+                description="Owner can raise fees/taxes without an upper bound",
+                snippet=snippet,
+                line_no=i,
+            )
+        )
 
     return findings
 

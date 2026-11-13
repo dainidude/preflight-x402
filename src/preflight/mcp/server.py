@@ -1,6 +1,6 @@
 """Preflight MCP server.
 
-Exposes three tools over MCP:
+Exposes four tools over MCP:
 
 * ``preflight_check``  — POST the Solidity source to ``POST /v1/scan`` and
   return the resulting :class:`~preflight.types.ScanReport` JSON. Payments flow
@@ -9,6 +9,8 @@ Exposes three tools over MCP:
   ``POST /v1/sim/deep`` (anvil fork) and return the resulting
   :class:`~preflight.types.SimReport` JSON (revert, gas, balance deltas,
   internal calls).
+* ``preflight_token_risk`` — POST a token address to ``POST /v1/token-risk``
+  and return the honeypot/tax/owner-privilege verdict as a ``ScanReport``.
 * ``preflight_pricing`` — free ``GET /`` price list.
 
 Run with stdio (default) or streamable HTTP (``--http``):
@@ -152,6 +154,39 @@ async def simulate_transaction(
     return report
 
 
+async def token_risk(address: str) -> dict[str, Any]:
+    """POST ``/v1/token-risk`` and return the parsed ScanReport dict.
+
+    Args:
+        address: Token contract address (0x-prefixed, 20 bytes).
+
+    Raises:
+        ToolError: On a 402 payment-required response, a rejected API key, or
+            any HTTP error.
+    """
+    payload: dict[str, Any] = {"address": address}
+    url = f"{config().api_url.rstrip('/')}/v1/token-risk"
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        response = await client.post(url, json=payload, headers=_api_headers())
+
+    if response.status_code == 402:
+        raise ToolError(
+            "Payment required (402) for POST /v1/token-risk ($0.05 USDC on Base "
+            "mainnet). Run the API with DEV_MODE=1 for local use, or run the paying "
+            "demo client: `uv run python client/pay_client.py --route token-risk "
+            "--address 0x...`."
+        )
+    if response.status_code in (401, 403):
+        raise ToolError(
+            "API key required or rejected. Set MCP_API_KEY (or share one key from "
+            "PREFLIGHT_API_KEYS) to the value configured on the API."
+        )
+    response.raise_for_status()
+
+    report = ScanReport.model_validate(response.json()).model_dump(mode="json")
+    return report
+
+
 async def pricing() -> dict[str, Any]:
     """GET ``/`` and return the free price list.
 
@@ -207,6 +242,19 @@ def create_server() -> MCPServer:
         mode: str = "quick",
     ) -> str:
         report = await simulate_transaction(to, data, value_wei, mode)
+        return json.dumps(report, indent=2)
+
+    @server.tool(
+        name="preflight_token_risk",
+        description=(
+            "Check a token contract before trading it. Returns a honeypot "
+            "transfer verdict, transfer tax percentage, and owner privileges as "
+            "a severity-scored ScanReport. Paid call ($0.05 USDC on Base mainnet) "
+            "via x402; DEV_MODE=1 skips payment."
+        ),
+    )
+    async def preflight_token_risk(address: str) -> str:
+        report = await token_risk(address)
         return json.dumps(report, indent=2)
 
     @server.tool(
