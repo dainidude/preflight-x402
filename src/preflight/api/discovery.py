@@ -150,7 +150,7 @@ def build_x402_discovery(cfg: Config | None = None) -> dict[str, Any]:
 router = APIRouter()
 
 
-@router.get("/.well-known/x402.json", include_in_schema=False)
+@router.api_route("/.well-known/x402.json", methods=["GET", "HEAD"], include_in_schema=False)
 async def x402_discovery() -> JSONResponse:
     """Serve the generated discovery document as JSON."""
     return JSONResponse(build_x402_discovery(config()))

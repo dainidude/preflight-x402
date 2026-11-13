@@ -259,7 +259,7 @@ from fastapi import FastAPI, APIRouter
 
 router = APIRouter()
 
-@router.get("/metrics")
+@router.api_route("/metrics", methods=["GET", "HEAD"])
 async def metrics_endpoint() -> Dict[str, Any]:
     """Return metrics snapshot.
     

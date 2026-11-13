@@ -33,6 +33,18 @@ from preflight.types import (
 )
 
 app = FastAPI(title="Preflight Security API", version="0.1.0")
+
+# CORS: browser-based paying agents (wallet-in-browser x402 flows) need this;
+# the API is keyless and stateless — CORS opens nothing that isn't public.
+from starlette.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 app.include_router(metrics_router)
 from preflight.api.discovery import router as discovery_router  # noqa: E402
 
@@ -92,7 +104,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root(request: Request) -> Response:
     """Content-negotiated root: JSON for API clients (Accept: application/json),
     HTML landing (with OG/meta tags) for browsers, scrapers and `*/*` clients —
@@ -127,7 +139,7 @@ async def root(request: Request) -> Response:
     return _serve_public("landing.html", media_type="text/html")
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "time": _now()}
 
@@ -140,7 +152,7 @@ def _serve_public(path: str, media_type: str = "text/plain") -> Response:
         return JSONResponse({"error": f"{path} not published yet"}, status_code=404)
 
 
-@app.get("/llms.txt")
+@app.api_route("/llms.txt", methods=["GET", "HEAD"])
 async def llms_txt() -> Response:
     return _serve_public("llms.txt")
 
@@ -149,7 +161,7 @@ async def llms_txt() -> Response:
 # (api/discovery.py) — prices/payment fields derive from code, no drift.
 
 
-@app.get("/.well-known/x402")
+@app.api_route("/.well-known/x402", methods=["GET", "HEAD"])
 async def x402_fanout(request: Request) -> dict[str, Any]:
     """x402scan compatibility fan-out (docs/DISCOVERY.md option B)."""
     base = str(request.base_url).rstrip("/")
@@ -165,10 +177,17 @@ async def x402_fanout(request: Request) -> dict[str, Any]:
     }
 
 
-@app.get("/favicon.ico", include_in_schema=False)
-@app.get("/favicon.svg", include_in_schema=False)
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/favicon.svg", methods=["GET", "HEAD"], include_in_schema=False)
 async def favicon() -> Response:
     return _serve_public("favicon.svg", media_type="image/svg+xml")
+
+
+@app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
+async def robots() -> Response:
+    return PlainTextResponse(
+        "User-agent: *\nAllow: /\nContent-Signal: search=yes, ai-train=no, ai-input=yes\n"
+    )
 
 
 @app.post("/v1/scan")

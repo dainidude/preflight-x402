@@ -269,60 +269,137 @@ def create_server() -> MCPServer:
 
 
 def create_http_app():
-    """ASGI app for hosted deployments: MCP streamable HTTP at /mcp plus a
-    Smithery/scanner server card at /.well-known/mcp/server-card.json.
+    """ASGI app for hosted deployments.
 
-    The MCP app is served at ROOT (not mounted) so its lifespan — which starts
-    the streamable session manager's task group — actually runs; Starlette
-    Mounts do not propagate lifespan to sub-apps. The server-card route is
-    appended to the app's route table.
+    Layers (outermost first): CORS → surface middleware → the MCP streamable app.
+
+    - CORS: the SDK's ``allowed_origins`` supports EXACT matches only — a
+      ``"*"`` entry is cargo-cult that 403s every cross-origin browser client
+      (Glama Inspector, web agents). Real CORS is handled here instead, and the
+      SDK's DNS-rebinding origin check is disabled (Modal's edge already routes
+      by Host; POST Content-Type and body-size checks still apply inside the SDK).
+    - Surface middleware: serves ``/``, ``/robots.txt`` and the Smithery server
+      card, and intercepts bare ``GET /mcp`` probes (no session + no SSE Accept)
+      with a friendly JSON card instead of the SDK's opaque 400 "Missing session
+      ID" — the only real "error" Modal's dashboard showed. Legitimate MCP
+      traffic (POST requests, SSE GETs with a session id) passes through untouched.
+    - The SDK app stays at ROOT with its own lifespan (Mounts do not propagate
+      lifespan — the session-manager task group would never start).
     """
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
+    from starlette.datastructures import Headers
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
     from mcp.server.transport_security import TransportSecuritySettings
 
     server = create_server()
     mcp_app = server.streamable_http_app(
         transport_security=TransportSecuritySettings(
-            # Production hosts (Modal) — the SDK's DNS-rebinding defaults only
-            # allow localhost. Open server: any origin may connect.
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=["preflight--preflight-api-mcp.modal.run"],
-            allowed_origins=["*"],
+            enable_dns_rebinding_protection=False,  # wildcard origins unsupported by the SDK; CORS below
         ),
     )
 
-    async def server_card(request):  # Smithery scanner metadata (SEP-1649)
-        return JSONResponse(
-            {
-                "serverInfo": {"name": "Preflight", "version": "0.1.0", "title": "Preflight — smart-contract & token security"},
-                "authentication": None,  # open server; tools pay per call via x402
-                "tools": [
-                    {
-                        "name": "preflight_check",
-                        "description": "Scan Solidity source and return a severity-scored, EIP-712-attested verdict ($0.01, 10 free/day).",
-                    },
-                    {
-                        "name": "preflight_sim",
-                        "description": "Simulate a transaction: revert decoding (quick, $0.05) or anvil-fork gas/balance/traces (deep, $0.25).",
-                    },
-                    {
-                        "name": "preflight_token_risk",
-                        "description": "Token risk by address: honeypot verdict, transfer tax %, owner privileges ($0.05).",
-                    },
-                    {
-                        "name": "preflight_pricing",
-                        "description": "Free: service info and price list.",
-                    },
-                ],
-            }
-        )
+    async def _send_json(payload: dict, scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse(payload)(scope, receive, send)
 
-    mcp_app.routes.append(
-        Route("/.well-known/mcp/server-card.json", server_card)
+    async def _send_text(text: str, scope: Scope, receive: Receive, send: Send) -> None:
+        await PlainTextResponse(text)(scope, receive, send)
+
+    class _SurfaceMiddleware:
+        """Extra routes + friendly probe handling around the MCP app."""
+
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            path = scope.get("path", "")
+            method = scope.get("method", "")
+            if method in ("GET", "HEAD"):
+                if path == "/" or path == "":
+                    await _send_json(_root_info(), scope, receive, send)
+                    return
+                if path == "/robots.txt":
+                    await _send_text(
+                        "User-agent: *\nAllow: /\nContent-Signal: search=yes, ai-train=no, ai-input=yes\n",
+                        scope, receive, send,
+                    )
+                    return
+                if path == "/.well-known/mcp/server-card.json":
+                    await _send_json(_server_card(), scope, receive, send)
+                    return
+                if path == "/mcp":
+                    headers = Headers(scope=scope)
+                    is_stream_get = (
+                        headers.get("mcp-session-id")
+                        and "text/event-stream" in headers.get("accept", "")
+                    )
+                    if not is_stream_get:
+                        # Bare probe (browser, scanner, directory): friendly card
+                        # instead of the SDK's 400 "Missing session ID".
+                        await _send_json(_probe_card(), scope, receive, send)
+                        return
+            await self.app(scope, receive, send)
+
+    return CORSMiddleware(
+        _SurfaceMiddleware(mcp_app),
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS", "DELETE", "HEAD"],
+        allow_headers=["*"],
+        expose_headers=["*"],
     )
-    return mcp_app
+
+
+def _root_info() -> dict:
+    return {
+        "service": "Preflight MCP",
+        "description": "Pay-per-call smart-contract & token security for AI agents, over MCP.",
+        "mcp_endpoint": "https://preflight--preflight-api-mcp.modal.run/mcp",
+        "transport": "streamable-http",
+        "tools": ["preflight_check", "preflight_sim", "preflight_token_risk", "preflight_pricing"],
+        "api_origin": "https://preflight--preflight-api-api.us-east.modal.run",
+        "pricing": "scan $0.01 · sim $0.05 · deep sim $0.25 · token-risk $0.05 · project $0.10 · address-risk $0.005 (USDC on Base via x402; first 10 calls/day free with X-Preflight-Free: trial)",
+        "server_card": "/.well-known/mcp/server-card.json",
+        "source": "https://github.com/dainidude/preflight-x402",
+    }
+
+
+def _probe_card() -> dict:
+    info = _root_info()
+    info["hint"] = "This is an MCP streamable-HTTP endpoint. MCP clients: POST JSON-RPC to this URL. Browsers see this info card."
+    return info
+
+
+def _server_card() -> dict:
+    return {
+        "serverInfo": {
+            "name": "Preflight",
+            "version": "0.1.0",
+            "title": "Preflight — smart-contract & token security",
+        },
+        "authentication": None,  # open server; tools pay per call via x402
+        "tools": [
+            {
+                "name": "preflight_check",
+                "description": "Scan Solidity source and return a severity-scored, EIP-712-attested verdict ($0.01, 10 free/day).",
+            },
+            {
+                "name": "preflight_sim",
+                "description": "Simulate a transaction: revert decoding (quick, $0.05) or anvil-fork gas/balance/traces (deep, $0.25).",
+            },
+            {
+                "name": "preflight_token_risk",
+                "description": "Token risk by address: honeypot verdict, transfer tax %, owner privileges ($0.05).",
+            },
+            {
+                "name": "preflight_pricing",
+                "description": "Free: service info and price list.",
+            },
+        ],
+    }
 
 
 def _parse_args() -> argparse.Namespace:
