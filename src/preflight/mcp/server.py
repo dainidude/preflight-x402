@@ -270,13 +270,28 @@ def create_server() -> MCPServer:
 
 def create_http_app():
     """ASGI app for hosted deployments: MCP streamable HTTP at /mcp plus a
-    Smithery/scanner server card at /.well-known/mcp/server-card.json."""
-    from starlette.applications import Starlette
+    Smithery/scanner server card at /.well-known/mcp/server-card.json.
+
+    The MCP app is served at ROOT (not mounted) so its lifespan — which starts
+    the streamable session manager's task group — actually runs; Starlette
+    Mounts do not propagate lifespan to sub-apps. The server-card route is
+    appended to the app's route table.
+    """
     from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
+    from starlette.routing import Route
+
+    from mcp.server.transport_security import TransportSecuritySettings
 
     server = create_server()
-    mcp_app = server.streamable_http_app()
+    mcp_app = server.streamable_http_app(
+        transport_security=TransportSecuritySettings(
+            # Production hosts (Modal) — the SDK's DNS-rebinding defaults only
+            # allow localhost. Open server: any origin may connect.
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["preflight--preflight-api-mcp.modal.run"],
+            allowed_origins=["*"],
+        ),
+    )
 
     async def server_card(request):  # Smithery scanner metadata (SEP-1649)
         return JSONResponse(
@@ -304,12 +319,10 @@ def create_http_app():
             }
         )
 
-    return Starlette(
-        routes=[
-            Route("/.well-known/mcp/server-card.json", server_card),
-            Mount("/", app=mcp_app),
-        ]
+    mcp_app.routes.append(
+        Route("/.well-known/mcp/server-card.json", server_card)
     )
+    return mcp_app
 
 
 def _parse_args() -> argparse.Namespace:
