@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dainidude/preflight",
+  "title": "Preflight",
+  "description": "Pay-per-call smart-contract security: scans, tx simulation, and token risk via x402 (USDC on Base).",
+  "repository": {
+    "url": "https://github.com/dainidude/preflight-x402",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://preflight--preflight-api-mcp.modal.run/mcp"
+    }
+  ]
+}

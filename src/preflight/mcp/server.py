@@ -268,6 +268,50 @@ def create_server() -> MCPServer:
     return server
 
 
+def create_http_app():
+    """ASGI app for hosted deployments: MCP streamable HTTP at /mcp plus a
+    Smithery/scanner server card at /.well-known/mcp/server-card.json."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    server = create_server()
+    mcp_app = server.streamable_http_app()
+
+    async def server_card(request):  # Smithery scanner metadata (SEP-1649)
+        return JSONResponse(
+            {
+                "serverInfo": {"name": "Preflight", "version": "0.1.0", "title": "Preflight — smart-contract & token security"},
+                "authentication": None,  # open server; tools pay per call via x402
+                "tools": [
+                    {
+                        "name": "preflight_check",
+                        "description": "Scan Solidity source and return a severity-scored, EIP-712-attested verdict ($0.01, 10 free/day).",
+                    },
+                    {
+                        "name": "preflight_sim",
+                        "description": "Simulate a transaction: revert decoding (quick, $0.05) or anvil-fork gas/balance/traces (deep, $0.25).",
+                    },
+                    {
+                        "name": "preflight_token_risk",
+                        "description": "Token risk by address: honeypot verdict, transfer tax %, owner privileges ($0.05).",
+                    },
+                    {
+                        "name": "preflight_pricing",
+                        "description": "Free: service info and price list.",
+                    },
+                ],
+            }
+        )
+
+    return Starlette(
+        routes=[
+            Route("/.well-known/mcp/server-card.json", server_card),
+            Mount("/", app=mcp_app),
+        ]
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preflight MCP server")
     parser.add_argument(

@@ -41,7 +41,11 @@ class Config:
         self.dev_mode: bool = _bool("DEV_MODE", default=False)
         self.free_tier: bool = _bool("FREE_TIER", default=True)
         self.attest_key_hex: str | None = os.getenv("PREFLIGHT_ATTEST_KEY")
-        self.api_url: str = os.getenv("PREFLIGHT_API_URL", f"http://127.0.0.1:{self.port}")
+        # Default to the PRODUCTION endpoint so distributed MCP servers and
+        # registry installs work out of the box; local dev overrides in .env.
+        self.api_url: str = os.getenv(
+            "PREFLIGHT_API_URL", "https://preflight--preflight-api-api.us-east.modal.run"
+        )
         self.rpc_url: str | None = os.getenv("RPC_URL")
         # USDC asset derived from network (override with PREFLIGHT_USDC_ASSET).
         self.usdc_asset: str = (

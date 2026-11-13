@@ -92,6 +92,23 @@ def api():
 @app.function(
     image=image,
     secrets=[modal.Secret.from_dict(DEPLOY_ENV)],
+    min_containers=1,  # registry/Smithery users need a warm MCP endpoint
+    timeout=600,
+)
+@modal.asgi_app()
+def mcp():
+    """Hosted MCP server: streamable HTTP at /mcp + Smithery server card.
+
+    URL: https://preflight--preflight-api-mcp.modal.run/mcp
+    """
+    from preflight.mcp.server import create_http_app
+
+    return create_http_app()
+
+
+@app.function(
+    image=image,
+    secrets=[modal.Secret.from_dict(DEPLOY_ENV)],
     volumes={"/data": _state_volume},
     schedule=modal.Cron("0 9 * * *"),
     timeout=120,
