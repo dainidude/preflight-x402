@@ -63,50 +63,39 @@ def bazaar_status() -> str:
         return f"verify {r.status_code} → {json.loads(base64.b64decode(ext)).get('bazaar')}"
 
 
-def merchant_catalog() -> str:
-    """Authenticated query: our wallet's resources in the CDP catalog."""
-    env = pay_client.load_env(pay_client.ENV_FILE)
-    kid = os.environ.get("CDP_API_KEY_ID") or env.get("CDP_API_KEY_ID")
-    ksec = os.environ.get("CDP_API_KEY_SECRET") or env.get("CDP_API_KEY_SECRET")
-    if not (kid and ksec):
-        return "CDP keys missing"
-    from cdp.auth import get_auth_headers, GetAuthHeadersOptions
-
-    last = "no attempt made"
-    for path in (
-        f"/platform/v2/x402/discovery/resources?payTo={PAYTO}&limit=50",
-        f"/platform/v2/x402/discovery/resources?type=http&payTo={PAYTO}&limit=50",
-    ):
-        hdrs = get_auth_headers(GetAuthHeadersOptions(
-            api_key_id=kid, api_key_secret=ksec,
-            request_method="GET", request_host="api.cdp.coinbase.com",
-            request_path=path.split("?")[0], source="x402",
-        ))
-        req = urllib.request.Request("https://api.cdp.coinbase.com" + path, headers=hdrs)
-        try:
-            items = json.load(urllib.request.urlopen(req, timeout=60)).get("items", [])
-            ours = [i for i in items if PAYTO in json.dumps(i)]
-            return (
-                f"{len(ours)} of {len(items)} items for our wallet"
-                if ours
-                else f"endpoint ignores payTo (returned {len(items)} general items, 0 ours)"
-            )
-        except Exception as e:
-            last = str(e)[:80]
-    return f"query failed: {last}"
+HOST = "preflight--preflight-api-api.us-east.modal.run"
+KNOWN_ROUTES = ["/v1/scan", "/v1/sim", "/v1/sim/deep", "/v1/token-risk", "/v1/scan/project", "/v1/address-risk"]
 
 
-def public_catalog() -> int:
-    try:
-        items = json.load(
-            urllib.request.urlopen(
-                "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?type=http&limit=500",
-                timeout=90,
-            )
-        ).get("items", [])
-        return sum(1 for i in items if PAYTO in json.dumps(i))
-    except Exception:
-        return -1
+def full_catalog_search() -> str:
+    """Walk the ENTIRE paginated CDP catalog (34k+ items, offset pagination)
+    and report which of our routes are indexed. Page-1-only reads were the bug
+    that made us look unlisted for two days."""
+    import time
+
+    base = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?type=http&limit=500"
+    offset, total, pages = 0, 0, 0
+    ours: dict[str, dict] = {}
+    while True:
+        d = json.load(urllib.request.urlopen(f"{base}&offset={offset}", timeout=90))
+        items = d.get("items", [])
+        pages += 1
+        for it in items:
+            res = it.get("resource", "")
+            if HOST in res:
+                ours[res.split(HOST)[-1] or "/"] = it
+        total = d.get("pagination", {}).get("total", 0)
+        offset += len(items)
+        if not items or offset >= total or pages > 80:
+            break
+        time.sleep(0.4)
+    indexed = sorted(ours.keys())
+    missing = [r for r in KNOWN_ROUTES if r not in indexed]
+    return (
+        f"{len(indexed)}/{len(KNOWN_ROUTES)} routes indexed: {indexed}"
+        + (f" | MISSING: {missing}" if missing else " | ALL ROUTES LIVE")
+        + f" (walked {offset}/{total} items)"
+    )
 
 
 def onyx_mirror() -> int:
@@ -132,8 +121,7 @@ def validate_index() -> str:
 
 if __name__ == "__main__":
     print("1. facilitator bazaar status:", bazaar_status())
-    print("2. authenticated merchant catalog:", merchant_catalog())
-    print("3. public catalog entries for our wallet:", public_catalog(), "(curated 500-slice)")
+    print("2. full-catalog search (all pages):", full_catalog_search())
     print("4. onyx mirror mentions:", onyx_mirror())
     print("5. coinbase validate:", validate_index())
     print("\n'processing' = accepted, cataloging is async on Coinbase's side.")
