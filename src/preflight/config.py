@@ -49,6 +49,10 @@ class Config:
             or NETWORK_USDC.get(self.network, NETWORK_USDC["base-sepolia"])
         )
         self.client_private_key: str | None = os.getenv("CLIENT_PRIVATE_KEY")
+        # Optional enterprise API-key layer: comma-separated keys; empty = off
+        self.api_keys: list[str] = [
+            k.strip() for k in os.getenv("PREFLIGHT_API_KEYS", "").split(",") if k.strip()
+        ]
         # Durable-state directory (Modal Volume in prod; empty = in-memory only)
         self.state_dir: str | None = os.getenv("STATE_DIR") or None
         # CDP Facilitator credentials (optional): when both are set, the server

@@ -1,0 +1,68 @@
+name: Uptime monitor (external)
+
+# Runs on GitHub's infra — genuinely outside Modal, so it can alert when
+# Modal itself (and the on-Modal heartbeat with it) is down.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      URL: https://preflight--preflight-api-api.us-east.modal.run
+      WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Probe health + x402 challenge
+        id: probe
+        run: |
+          set +e
+          health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL/health")
+          challenge_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+            -X POST "$URL/v1/scan" -H 'Content-Type: application/json' \
+            -d '{"source":"contract A {}"}')
+          echo "health=$health_code challenge=$challenge_code"
+          if [ "$health_code" = "200" ] && [ "$challenge_code" = "402" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Was the previous run failing? (recovery detection)
+        id: prev
+        run: |
+          set +e
+          prev=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=2" \
+            | python3 -c "
+          import json,sys
+          runs=[r for r in json.load(sys.stdin).get('workflow_runs',[]) if r['name']=='Uptime monitor (external)']
+          prev=[r for r in runs if r['id']!=${{ github.run_id }}]
+          print(prev[0]['conclusion'] if prev else 'none')
+          ")
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: Fail loudly when the webhook secret is missing
+        if: env.WEBHOOK == ''
+        run: |
+          echo "::error::DISCORD_WEBHOOK_URL secret is not set — uptime alerts cannot be delivered."
+          exit 1
+
+      - name: Alert on failure
+        if: steps.probe.outputs.ok == 'false'
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"🚨 Preflight EXTERNAL monitor: health/challenge probe FAILED at $(date -u +%H:%M UTC). Check modal.com status + dashboard.\"}" \
+            "$WEBHOOK"
+
+      - name: Recovery notice
+        if: steps.probe.outputs.ok == 'true' && steps.prev.outputs.prev == 'failure'
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d '{"content":"✅ Preflight recovered: external probe passing again (health 200, 402 challenge live)."}' \
+            "$WEBHOOK"

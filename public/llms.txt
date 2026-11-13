@@ -46,6 +46,12 @@ containing the x402 payment requirements. Retry the same request with a
 `PAYMENT-SIGNATURE` header carrying the signed payment payload. A successful
 paid response carries a `PAYMENT-RESPONSE` header with the settlement result.
 
+No account is required by default. If the operator enables the optional
+API-key layer (`PREFLIGHT_API_KEYS`), paid calls must also send
+`X-Preflight-Key: <key>`; the MCP server reads `MCP_API_KEY` (or the first
+`PREFLIGHT_API_KEYS` entry) and the demo client accepts `--key` /
+`PREFLIGHT_API_KEY`.
+
 ## Request bodies
 
 `POST /v1/scan`:

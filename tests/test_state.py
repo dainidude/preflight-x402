@@ -101,3 +101,37 @@ def test_format_digest_numbers() -> None:
     assert "Unique Payers: 2" in text
     assert "Payment Required: 7" in text
     assert "block" in text
+
+
+def test_attribution_counters_and_masking(tmp_path: Path, monkeypatch) -> None:
+    from preflight.api.metrics import MetricsCollector
+
+    c = MetricsCollector()
+    c.record_scan("POST /v1/scan", "block", True, agent="0xc5925C971f5628ba1E195C83Ce83317A70b3f30B")
+    c.record_settle("POST /v1/scan", 10000, "0xc592…f30B", agent="0xc5925C971f5628ba1E195C83Ce83317A70b3f30B")
+    c.record_scan("POST /v1/sim", "review", True, agent="0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41")
+    snap = c.snapshot()
+    assert snap["agents_total"] == 2
+    top = snap["top_agents"][0]
+    assert top["agent"] == "0xc592…f30B" and top["revenue_base_units"] == 10000
+    assert "…" in top["agent"]  # masked, never the full address
+    # no agent -> not attributed
+    c.record_scan("POST /v1/scan", "looks_ok", False)
+    assert c.snapshot()["agents_total"] == 2
+
+
+def test_attribution_persists(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    monkeypatch.setenv("STATE_DIR", str(tmp_path))
+    for m in [k for k in sys.modules if k.startswith("preflight.api.metrics")]:
+        del sys.modules[m]
+    from preflight.api import metrics as m_mod
+
+    c = m_mod.MetricsCollector()
+    c.record_settle("POST /v1/sim", 50000, None, agent="0xabc123456789def0")
+    fresh = m_mod.MetricsCollector()
+    snap = fresh.snapshot()
+    assert snap["agents_total"] == 1
+    assert snap["top_agents"][0]["revenue_base_units"] == 50000
+    monkeypatch.delenv("STATE_DIR")

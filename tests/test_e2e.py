@@ -45,11 +45,22 @@ def test_health(client: TestClient) -> None:
 
 
 def test_root_lists_all_paid_routes(client: TestClient) -> None:
-    r = client.get("/")
+    r = client.get("/", headers={"Accept": "application/json"})
     assert r.status_code == 200
     prices = r.json()["prices"]
     for route in ("POST /v1/scan", "POST /v1/scan/project", "POST /v1/address-risk"):
         assert route in prices, f"missing price entry for {route}"
+
+
+def test_root_serves_html_landing_to_scrapers(client: TestClient) -> None:
+    """x402scan's scraper sends Accept: */* and must get the OG-tagged landing."""
+    r = client.get("/", headers={"Accept": "*/*"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    assert 'name="description"' in body
+    assert "og:title" in body
+    assert "$0.01" in body  # pricing visible in the landing
 
 
 def test_dev_mode_header_present(client: TestClient) -> None:

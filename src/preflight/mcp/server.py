@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from typing import Any
 
 import httpx
@@ -32,13 +33,42 @@ from ..types import ScanReport, SimReport
 
 _DEV_HEADER = "X-Preflight-Dev"
 _DEV_HEADER_VALUE = "bypass"
+_ACCEPT_HEADER = "Accept"
+_ACCEPT_JSON = "application/json"
+_API_KEY_HEADER = "X-Preflight-Key"
 
 
-def _dev_headers() -> dict[str, str]:
-    """Return the dev-mode bypass header when DEV_MODE is set on this server."""
+def _api_key() -> str | None:
+    """Return the optional Preflight API key for this MCP server.
+
+    ``MCP_API_KEY`` wins; otherwise the first entry in the server's
+    comma-separated ``PREFLIGHT_API_KEYS`` is used. Empty/unset means the
+    API-key layer is off and behavior is unchanged.
+    """
+    direct = os.getenv("MCP_API_KEY", "").strip()
+    if direct:
+        return direct
+    for candidate in os.getenv("PREFLIGHT_API_KEYS", "").split(","):
+        key = candidate.strip()
+        if key:
+            return key
+    return None
+
+
+def _api_headers() -> dict[str, str]:
+    """Headers for every Preflight API call.
+
+    ``Accept: application/json`` is required because ``GET /`` serves HTML to
+    browsers/scrapers unless a client explicitly negotiates JSON. The optional
+    API key and dev bypass are added when configured.
+    """
+    headers = {_ACCEPT_HEADER: _ACCEPT_JSON}
     if config().dev_mode:
-        return {_DEV_HEADER: _DEV_HEADER_VALUE}
-    return {}
+        headers[_DEV_HEADER] = _DEV_HEADER_VALUE
+    key = _api_key()
+    if key:
+        headers[_API_KEY_HEADER] = key
+    return headers
 
 
 async def scan_source(source: str, contract_name: str | None = None) -> dict[str, Any]:
@@ -53,12 +83,17 @@ async def scan_source(source: str, contract_name: str | None = None) -> dict[str
 
     url = f"{config().api_url.rstrip('/')}/v1/scan"
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, json=payload, headers=_dev_headers())
+        response = await client.post(url, json=payload, headers=_api_headers())
 
     if response.status_code == 402:
         raise ToolError(
             "Payment required (402). Run the API with DEV_MODE=1 for local use, "
             "or use the paying demo client (client/pay_client.py)."
+        )
+    if response.status_code in (401, 403):
+        raise ToolError(
+            "API key required or rejected. Set MCP_API_KEY (or share one key from "
+            "PREFLIGHT_API_KEYS) to the value configured on the API."
         )
     response.raise_for_status()
 
@@ -97,7 +132,7 @@ async def simulate_transaction(
 
     url = f"{config().api_url.rstrip('/')}{path}"
     async with httpx.AsyncClient(timeout=180.0) as client:
-        response = await client.post(url, json=payload, headers=_dev_headers())
+        response = await client.post(url, json=payload, headers=_api_headers())
 
     if response.status_code == 402:
         route_flag = "sim-deep" if mode == "deep" else "sim"
@@ -106,6 +141,11 @@ async def simulate_transaction(
             "Run the API with DEV_MODE=1 for local use, or run the paying demo client: "
             f"`uv run python client/pay_client.py --route {route_flag}`."
         )
+    if response.status_code in (401, 403):
+        raise ToolError(
+            "API key required or rejected. Set MCP_API_KEY (or share one key from "
+            "PREFLIGHT_API_KEYS) to the value configured on the API."
+        )
     response.raise_for_status()
 
     report = SimReport.model_validate(response.json()).model_dump(mode="json")
@@ -113,10 +153,14 @@ async def simulate_transaction(
 
 
 async def pricing() -> dict[str, Any]:
-    """GET ``/`` and return the free price list."""
+    """GET ``/`` and return the free price list.
+
+    Sends ``Accept: application/json`` because ``/`` serves the HTML landing
+    page to browsers/scrapers and JSON only when explicitly negotiated.
+    """
     url = f"{config().api_url.rstrip('/')}/"
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url)
+        response = await client.get(url, headers=_api_headers())
     response.raise_for_status()
     return response.json()
 

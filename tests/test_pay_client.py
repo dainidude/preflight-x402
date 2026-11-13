@@ -345,6 +345,10 @@ def test_post_paid_route_amount_and_path(route_name: str) -> None:
 
     assert len(seen) == 2
     assert seen[0].url.path == route.path
+    assert seen[0].headers.get("Accept") == "application/json"
+    assert seen[1].headers.get("Accept") == "application/json"
+    assert "X-Preflight-Key" not in seen[0].headers
+    assert "X-Preflight-Key" not in seen[1].headers
     assert "PAYMENT-SIGNATURE" in seen[1].headers
     assert report["verdict"] == "block"
     assert settle is not None and settle["success"] is True
@@ -364,6 +368,66 @@ def test_post_dev_route_sends_header_and_path() -> None:
     assert report["reverted"] is True
     assert seen[0].url.path == "/v1/sim"
     assert seen[0].headers.get("X-Preflight-Dev") == "bypass"
+    assert seen[0].headers.get("Accept") == "application/json"
+    assert "X-Preflight-Key" not in seen[0].headers
+
+
+def test_paid_flow_sends_accept_and_key_on_both_requests() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if "PAYMENT-SIGNATURE" in request.headers:
+            return httpx.Response(
+                200, json=REPORT, headers={"PAYMENT-RESPONSE": _settle_header()}
+            )
+        return _make_402()
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    pay_client.post_paid(
+        API_URL,
+        "/v1/scan",
+        pay_client.scan_payload(pay_client.SAMPLE_SOURCE),
+        PRIVATE_KEY,
+        http_client=http_client,
+        api_key="client-secret",
+    )
+
+    assert len(seen) == 2
+    for request in seen:
+        assert request.headers.get("Accept") == "application/json"
+        assert request.headers.get("X-Preflight-Key") == "client-secret"
+
+
+def test_post_dev_sends_accept_and_key() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=SIM_REPORT)
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    pay_client.post_dev(
+        API_URL, "/v1/sim", pay_client.sim_payload(), http_client=http_client, api_key="dev-key"
+    )
+    assert seen[0].headers.get("Accept") == "application/json"
+    assert seen[0].headers.get("X-Preflight-Key") == "dev-key"
+    assert seen[0].headers.get("X-Preflight-Dev") == "bypass"
+
+
+def test_resolve_api_key_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("PREFLIGHT_API_KEY=file-key\n", encoding="utf-8")
+    monkeypatch.delenv("PREFLIGHT_API_KEY", raising=False)
+
+    assert pay_client.resolve_api_key(None, env_file) == "file-key"
+    monkeypatch.setenv("PREFLIGHT_API_KEY", "env-key")
+    assert pay_client.resolve_api_key(None, env_file) == "env-key"
+    assert pay_client.resolve_api_key("cli-key", env_file) == "cli-key"
+    assert pay_client.resolve_api_key("", env_file) == "env-key"
+    monkeypatch.delenv("PREFLIGHT_API_KEY", raising=False)
+    env_file.write_text("", encoding="utf-8")
+    assert pay_client.resolve_api_key(None, env_file) is None
 
 
 def test_paid_exchange_rejected_payment_raises() -> None:

@@ -131,3 +131,45 @@ def test_free_routes_never_require_payment(prod_client: TestClient) -> None:
     for path in ("/", "/health", "/llms.txt", "/.well-known/x402.json"):
         r = prod_client.get(path)
         assert r.status_code in (200, 404), f"{path} should not be paywalled: {r.status_code}"
+
+
+def test_api_key_layer_enforcement(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PREFLIGHT_API_KEYS set → paid routes require X-Preflight-Key."""
+    monkeypatch.setenv("DEV_MODE", "0")
+    monkeypatch.setenv("FREE_TIER", "0")
+    monkeypatch.setenv("PREFLIGHT_API_KEYS", "enterprise-key-1, enterprise-key-2")
+    monkeypatch.setenv("PREFLIGHT_PAY_TO_ADDRESS", "0x" + "11" * 20)
+    Config.reload()
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: make_requirements())
+    pay_mod.usage = pay_mod.UsageTracker()
+    with TestClient(app) as c:
+        r = c.post("/v1/scan", json={"source": "contract A {}"})
+        assert r.status_code == 401
+        assert "X-Preflight-Key" in r.json()["error"]
+        r2 = c.post("/v1/scan", json={"source": "contract A {}"},
+                    headers={"X-Preflight-Key": "wrong"})
+        assert r2.status_code == 401
+        r3 = c.post("/v1/scan", json={"source": "contract A {}"},
+                    headers={"X-Preflight-Key": "enterprise-key-2"})
+        assert r3.status_code == 402  # key ok → proceeds to the x402 challenge
+        m = c.get("/metrics").json()["metrics"]
+        assert m["auth_errors_total"] == 2
+
+
+def test_api_key_layer_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No PREFLIGHT_API_KEYS → byte-identical behavior, no 401s."""
+    monkeypatch.setenv("DEV_MODE", "0")
+    monkeypatch.setenv("FREE_TIER", "0")
+    monkeypatch.setenv("PREFLIGHT_PAY_TO_ADDRESS", "0x" + "11" * 20)
+    monkeypatch.delenv("PREFLIGHT_API_KEYS", raising=False)
+    Config.reload()
+    from preflight.api import metrics as m_mod
+
+    m_mod.collector = m_mod.MetricsCollector()  # fresh counters (no 401s from the prior test)
+    monkeypatch.setattr(pay_mod, "build_requirements", lambda route, cfg=None: make_requirements())
+    pay_mod.usage = pay_mod.UsageTracker()
+    with TestClient(app) as c:
+        r = c.post("/v1/scan", json={"source": "contract A {}"})
+        assert r.status_code == 402
+        m = c.get("/metrics").json()["metrics"]
+        assert m["auth_errors_total"] == 0

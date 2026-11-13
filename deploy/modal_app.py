@@ -63,6 +63,17 @@ image = (
 
 app = modal.App("preflight-api", image=image)
 
+# Deploy-time guard: mainnet must go through the CDP facilitator (KYT/OFAC +
+# Bazaar indexing). A silently-empty key (e.g. .env missing locally) would
+# otherwise fall back to the public testnet facilitator ON MAINNET.
+if DEPLOY_ENV["PREFLIGHT_NETWORK"] == "base" and not (
+    DEPLOY_ENV["CDP_API_KEY_ID"] and DEPLOY_ENV["CDP_API_KEY_SECRET"]
+):
+    raise SystemExit(
+        "Refusing to deploy to mainnet without CDP_API_KEY_ID/CDP_API_KEY_SECRET "
+        "in the environment. Source .env before deploying."
+    )
+
 
 @app.function(
     secrets=[modal.Secret.from_dict(DEPLOY_ENV)],

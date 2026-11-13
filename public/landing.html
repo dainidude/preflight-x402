@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Preflight — pay-per-call smart-contract security for AI agents</title>
+  <meta name="description" content="Preflight scans Solidity (solc + Slither + custom DeFi detectors), simulates transactions (eth_call + deep anvil fork with gas, balance deltas and internal traces), and returns EIP-712-attested verdicts: looks_ok, review, or block. Paid per call in USDC on Base via the x402 protocol — $0.01 per scan, $0.05 per simulation, $0.25 deep simulation.">
+  <meta property="og:title" content="Preflight — smart-contract security API for AI agents">
+  <meta property="og:description" content="Pay-per-call Solidity security scans and transaction simulations with EIP-712-attested verdicts. $0.01/scan, $0.05/sim, $0.25 deep sim (anvil fork). USDC on Base via x402 — no accounts required.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://preflight--preflight-api-api.us-east.modal.run/">
+  <meta property="og:image" content="https://preflight--preflight-api-api.us-east.modal.run/favicon.svg">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Preflight — smart-contract security API for AI agents">
+  <meta name="twitter:description" content="Pay-per-call Solidity scans and transaction simulations, EIP-712-attested verdicts, USDC on Base via x402.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: #0A0A08; color: #d8d4c8; line-height: 1.6; padding: 3rem 1.5rem; max-width: 760px; margin: 0 auto; }
+    h1 { color: #FFB000; font-size: 1.6rem; margin-bottom: .5rem; }
+    h1 .sub { color: #8a8578; font-weight: 400; font-size: .95rem; display: block; margin-top: .3rem; }
+    h2 { color: #FFB000; font-size: 1rem; margin: 2.2rem 0 .6rem; }
+    code { background: #1a1912; color: #FFB000; padding: .1rem .35rem; border-radius: 3px; font-size: .85em; }
+    pre { background: #1a1912; padding: 1rem; border-radius: 8px; overflow-x: auto; margin: .6rem 0; font-size: .8rem; }
+    table { border-collapse: collapse; margin: .6rem 0; width: 100%; }
+    td, th { border: 1px solid #2a2820; padding: .4rem .6rem; text-align: left; font-size: .85rem; }
+    th { color: #FFB000; }
+    a { color: #FFB000; }
+    .badge { display: inline-block; border: 1px solid #FFB000; color: #FFB000; border-radius: 999px; padding: .15rem .7rem; font-size: .75rem; margin-right: .4rem; }
+    footer { margin-top: 3rem; color: #8a8578; font-size: .8rem; border-top: 1px solid #2a2820; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Preflight
+    <span class="sub">pay-per-call smart-contract security &amp; transaction simulation for AI agents</span>
+  </h1>
+  <p><span class="badge">x402</span><span class="badge">USDC on Base</span><span class="badge">EIP-712 attested</span></p>
+
+  <p>POST Solidity source or a transaction, receive a severity-scored, signed verdict:
+  <code>looks_ok</code> · <code>review</code> · <code>block</code>. Payment happens inline over
+  HTTP 402 — no accounts, no sign-ups (optional API keys available for enterprise use). First 10 scans/day are free with the
+  <code>X-Preflight-Free: trial</code> header.</p>
+
+  <h2>Prices</h2>
+  <table>
+    <tr><th>Route</th><th>Product</th><th>Price</th></tr>
+    <tr><td><code>POST /v1/scan</code></td><td>Solidity scan — solc + Slither + 5 custom DeFi detectors</td><td>$0.01</td></tr>
+    <tr><td><code>POST /v1/sim</code></td><td>Transaction simulation — RPC eth_call + revert decoding</td><td>$0.05</td></tr>
+    <tr><td><code>POST /v1/sim/deep</code></td><td>Deep simulation — anvil fork: gas, balance deltas, internal traces</td><td>$0.25</td></tr>
+    <tr><td><code>POST /v1/scan/project</code></td><td>Multi-file project scan</td><td>$0.10</td></tr>
+    <tr><td><code>POST /v1/address-risk</code></td><td>Address risk heuristics</td><td>$0.005</td></tr>
+  </table>
+
+  <h2>Try it</h2>
+  <pre>curl -i -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"contract A {}"}'
+# → 402 Payment Required, PAYMENT-REQUIRED header
+# pay via x402 (USDC on Base), retry with PAYMENT-SIGNATURE → verdict</pre>
+
+  <h2>Agent surface</h2>
+  <p>Machine-readable everything: <a href="/openapi.json">OpenAPI</a> ·
+  <a href="/llms.txt">llms.txt</a> · <a href="/.well-known/x402.json">x402 discovery</a> ·
+  <a href="/metrics">/metrics</a> · MCP tools: <code>preflight_check</code>,
+  <code>preflight_sim</code>, <code>preflight_pricing</code>.</p>
+
+  <footer>
+    Preflight · open source at <a href="https://github.com/dainidude/preflight-x402">github.com/dainidude/preflight-x402</a>
+    · listed on <a href="https://www.x402scan.com/server/1961af3d-afed-400b-bc57-ca4ebe41ef18">x402scan</a>
+    · <code>looks_ok</code> is not an audit.
+  </footer>
+</body>
+</html>

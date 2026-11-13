@@ -10,7 +10,7 @@ import socket
 from datetime import datetime, timezone
 from typing import Any
 
-from eth_abi import decode as eth_abi_decode
+from eth_abi import decode as eth_abi_decode, encode as eth_abi_encode
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
@@ -20,6 +20,18 @@ from preflight.core.scoring import calculate_score, determine_verdict
 from preflight.types import Finding, SimReport, SimRequest
 
 SIMULATOR_ADDRESS = Web3.to_checksum_address("0x" + "aa" * 20)
+
+# ERC-20 function selectors used to spot token contracts for the honeypot probe.
+TRANSFER_SELECTOR = "0xa9059cbb"
+TRANSFER_FROM_SELECTOR = "0x23b872dd"
+BALANCE_OF_SELECTOR = "0x70a08231"
+TOTAL_SUPPLY_SELECTOR = "0x18160ddd"
+_ERC20_SELECTORS = (
+    TRANSFER_SELECTOR,
+    TRANSFER_FROM_SELECTOR,
+    BALANCE_OF_SELECTOR,
+    TOTAL_SUPPLY_SELECTOR,
+)
 
 ERROR_SELECTOR = "0x08c379a0"
 PANIC_SELECTOR = "0x4e487b71"
@@ -143,6 +155,144 @@ def _deep_unavailable_finding(context: str) -> Finding:
         snippet=None,
         detector="heuristic:sim",
     )
+
+
+def _honeypot_transfer_finding(holder: str, reason: str, contract: str) -> Finding:
+    return Finding(
+        id="honeypot:transfer-restricted",
+        title="Transfer restricted (honeypot)",
+        severity="high",
+        confidence=0.85,
+        description=(
+            f"transfer(recipient, 1) reverted for impersonated holder {holder}: {reason}; "
+            f"the same call succeeded when sent from the contract itself ({contract}), "
+            f"suggesting owner/contract-specific transfer restrictions"
+        ),
+        snippet=None,
+        detector="custom:honeypot",
+    )
+
+
+def _looks_like_erc20(code_hex: str) -> bool:
+    """Return True if deployed bytecode contains any common ERC-20 selectors."""
+    code = code_hex.lower()
+    return any(sel[2:] in code for sel in _ERC20_SELECTORS)
+
+
+def _random_address() -> str:
+    """Return a checksummed random Ethereum address for probe impersonation."""
+    return Web3.to_checksum_address("0x" + os.urandom(20).hex())
+
+
+def _probe_honeypot_transfer(
+    w3: Web3, token_address: str, _from_address: str
+) -> tuple[list[Finding], list[str]]:
+    """Best-effort ERC-20 honeypot probe on the local anvil fork.
+
+    Compares a transfer from a random holder against a transfer from the
+    contract itself. If the holder is blocked while the contract succeeds,
+    emit a high-severity honeypot finding.
+    """
+    findings: list[Finding] = []
+    notes: list[str] = []
+
+    try:
+        code_hex = w3.eth.get_code(token_address).hex() or "0x"
+    except Exception as exc:
+        notes.append(f"Honeypot probe skipped: could not read target code ({exc})")
+        return findings, notes
+
+    if not _looks_like_erc20(code_hex):
+        notes.append(
+            f"Honeypot probe skipped: {token_address} does not look like an ERC-20 token"
+        )
+        return findings, notes
+
+    holder = _random_address()
+    recipient = SIMULATOR_ADDRESS
+    try:
+        w3.provider.make_request("anvil_impersonateAccount", [holder])
+        w3.provider.make_request("anvil_setBalance", [holder, hex(10**18)])
+        w3.provider.make_request("anvil_impersonateAccount", [token_address])
+    except Exception as exc:
+        notes.append(f"Honeypot probe skipped: anvil setup failed ({exc})")
+        return findings, notes
+
+    transfer_data = TRANSFER_SELECTOR + eth_abi_encode(
+        ["address", "uint256"], [recipient, 1]
+    ).hex()
+
+    holder_reverted = False
+    holder_reason: str | None = None
+    try:
+        w3.eth.call(
+            {"from": holder, "to": token_address, "data": transfer_data, "value": 0},
+            "latest",
+        )
+    except ContractLogicError as exc:
+        holder_reverted = True
+        raw = _extract_revert_data(exc)
+        holder_reason = _decode_revert(raw) if raw else str(exc)
+    except Exception as exc:
+        notes.append(f"Honeypot probe skipped: holder call failed ({exc})")
+        return findings, notes
+
+    contract_reverted = False
+    contract_reason: str | None = None
+    try:
+        w3.eth.call(
+            {
+                "from": token_address,
+                "to": token_address,
+                "data": transfer_data,
+                "value": 0,
+            },
+            "latest",
+        )
+    except ContractLogicError as exc:
+        contract_reverted = True
+        raw = _extract_revert_data(exc)
+        contract_reason = _decode_revert(raw) if raw else str(exc)
+    except Exception as exc:
+        notes.append(f"Honeypot probe skipped: contract-self call failed ({exc})")
+        return findings, notes
+
+    if holder_reverted and not contract_reverted:
+        # A zero-balance holder reverting on balance/allowance is NORMAL token
+        # behavior (grill finding), not a restriction. Only flag reverts whose
+        # decoded reason indicates access control or an unknown restriction.
+        reason = (holder_reason or "").lower()
+        normal_markers = (
+            "balance",
+            "allowance",
+            "insufficient",
+            "exceeds",
+            "erc20:",
+        )
+        if any(m in reason for m in normal_markers):
+            notes.append(
+                f"Honeypot probe: holder transfer reverted for a balance/allowance "
+                f"reason ({holder_reason}) — normal for an unfunded holder, not a restriction"
+            )
+        else:
+            findings.append(
+                _honeypot_transfer_finding(holder, holder_reason or "unknown", token_address)
+            )
+        notes.append(
+            f"Honeypot probe: holder transfer reverted ({holder_reason}) but "
+            f"contract-self transfer succeeded"
+        )
+    elif holder_reverted and contract_reverted:
+        notes.append(
+            f"Honeypot probe: both holder and contract-self transfers reverted "
+            f"(holder: {holder_reason}, contract: {contract_reason}); no restriction evidence"
+        )
+    else:
+        notes.append(
+            "Honeypot probe: holder transfer succeeded; no transfer restriction evidence"
+        )
+
+    return findings, notes
 
 
 def _create_web3(rpc_url: str) -> Web3:
@@ -519,6 +669,16 @@ async def _run_deep_simulation(
                     internal_calls = internal_calls[:10]
             except Exception:
                 pass
+
+            # Honeypot transfer probe for ERC-20 targets (deep mode only).
+            try:
+                probe_findings, probe_notes = _probe_honeypot_transfer(
+                    w3, to_address, from_address
+                )
+                findings.extend(probe_findings)
+                notes.extend(probe_notes)
+            except Exception as exc:
+                notes.append(f"Honeypot transfer probe skipped: {exc}")
 
             # Optional static analysis of target source.
             if req.source:

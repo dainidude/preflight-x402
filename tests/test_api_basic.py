@@ -57,7 +57,7 @@ def client(dev_env: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClien
 
 
 def test_root_lists_paid_routes(client: TestClient) -> None:
-    data = client.get("/").json()
+    data = client.get("/", headers={"Accept": "application/json"}).json()
     assert data["service"]
     for route in ("POST /v1/scan", "POST /v1/scan/project", "POST /v1/address-risk"):
         assert route in data["prices"]

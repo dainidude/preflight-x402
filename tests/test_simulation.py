@@ -15,7 +15,9 @@ from preflight.core.simulation import (
     ERROR_SELECTOR,
     PANIC_SELECTOR,
     SIMULATOR_ADDRESS,
+    TRANSFER_SELECTOR,
     _decode_revert,
+    _probe_honeypot_transfer,
     run_simulation,
 )
 from preflight.types import SimRequest
@@ -236,6 +238,161 @@ class TestDeepSimulation:
         assert "fell back to quick mode" in " ".join(report.notes)
 
 
+def _mock_w3_for_probe(
+    token: str,
+    code: str,
+    holder: str,
+    holder_reverts: bool = False,
+    contract_reverts: bool = False,
+    setup_fail: bool = False,
+    code_fail: bool = False,
+):
+    """Return a mock web3 and a log of provider calls for honeypot probe tests."""
+    calls: list[tuple[str, Any]] = []
+
+    class MockEth:
+        def get_code(self, address: str) -> bytes:
+            if code_fail:
+                raise ConnectionError("RPC offline")
+            return bytes.fromhex(code.removeprefix("0x"))
+
+        def call(self, tx: dict[str, Any], block: str = "latest") -> bytes:
+            calls.append(("eth_call", tx))
+            if tx["from"].lower() == holder.lower():
+                if holder_reverts:
+                    raise ContractLogicError(
+                        "execution reverted",
+                        data=ERROR_SELECTOR
+                        + eth_abi_encode(["string"], ["holder blocked"]).hex(),
+                    )
+                return b""
+            if tx["from"].lower() == token.lower():
+                if contract_reverts:
+                    raise ContractLogicError(
+                        "execution reverted",
+                        data=ERROR_SELECTOR
+                        + eth_abi_encode(["string"], ["contract blocked"]).hex(),
+                    )
+                return b""
+            raise ContractLogicError("unexpected from address")
+
+    class MockProvider:
+        def make_request(self, method: str, params: list[Any]) -> dict[str, Any]:
+            calls.append((method, params))
+            if setup_fail:
+                raise ConnectionError("anvil offline")
+            return {}
+
+    return SimpleNamespace(eth=MockEth(), provider=MockProvider()), calls
+
+
+class TestHoneypotProbe:
+    @pytest.mark.asyncio
+    async def test_detects_holder_restricted(self, monkeypatch: pytest.MonkeyPatch):
+        token = "0x" + "34" * 20
+        holder = "0x" + "12" * 20
+        monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
+        w3, calls = _mock_w3_for_probe(
+            token, TRANSFER_SELECTOR[2:] + "00" * 100, holder,
+            holder_reverts=True, contract_reverts=False,
+        )
+        findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
+        assert any(f.id == "honeypot:transfer-restricted" for f in findings)
+        assert any("holder transfer reverted" in n for n in notes)
+        # Impersonation setup calls.
+        assert any(method == "anvil_impersonateAccount" for method, _ in calls)
+
+    @pytest.mark.asyncio
+    async def test_no_finding_when_both_succeed(self, monkeypatch: pytest.MonkeyPatch):
+        token = "0x" + "34" * 20
+        holder = "0x" + "12" * 20
+        monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
+        w3, _ = _mock_w3_for_probe(
+            token, TRANSFER_SELECTOR[2:] + "00" * 100, holder,
+            holder_reverts=False, contract_reverts=False,
+        )
+        findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
+        assert not any(f.id == "honeypot:transfer-restricted" for f in findings)
+        assert any("succeeded" in n for n in notes)
+
+    @pytest.mark.asyncio
+    async def test_no_finding_when_both_revert(self, monkeypatch: pytest.MonkeyPatch):
+        token = "0x" + "34" * 20
+        holder = "0x" + "12" * 20
+        monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
+        w3, _ = _mock_w3_for_probe(
+            token, TRANSFER_SELECTOR[2:] + "00" * 100, holder,
+            holder_reverts=True, contract_reverts=True,
+        )
+        findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
+        assert not any(f.id == "honeypot:transfer-restricted" for f in findings)
+        assert any("both holder and contract-self transfers reverted" in n for n in notes)
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_not_erc20(self, monkeypatch: pytest.MonkeyPatch):
+        token = "0x" + "34" * 20
+        holder = "0x" + "12" * 20
+        monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
+        w3, _ = _mock_w3_for_probe(token, "0x6000", holder)
+        findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
+        assert not findings
+        assert any("does not look like an ERC-20" in n for n in notes)
+
+    @pytest.mark.asyncio
+    async def test_skipped_on_setup_failure(self, monkeypatch: pytest.MonkeyPatch):
+        token = "0x" + "34" * 20
+        holder = "0x" + "12" * 20
+        monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
+        w3, _ = _mock_w3_for_probe(
+            token, TRANSFER_SELECTOR[2:] + "00" * 100, holder, setup_fail=True,
+        )
+        findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
+        assert not findings
+        assert any("anvil setup failed" in n for n in notes)
+
+
+class TestAnvilLifecycle:
+    @pytest.mark.asyncio
+    async def test_anvil_process_terminated_when_ready_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """If anvil spawns but never becomes ready, the subprocess must still die."""
+
+        class FakeProc:
+            def __init__(self) -> None:
+                self.returncode: int | None = None
+                self.terminated = False
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self.returncode = 0
+
+            async def wait(self) -> int:
+                return 0
+
+        fake = FakeProc()
+        monkeypatch.setattr(simulation_mod, "_anvil_path", lambda: "/fake/anvil")
+
+        async def fake_start(*_a: Any, **_kw: Any) -> FakeProc:
+            return fake
+
+        async def fake_wait(*_a: Any, **_kw: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(simulation_mod, "_start_anvil", fake_start)
+        monkeypatch.setattr(simulation_mod, "_wait_for_anvil", fake_wait)
+        monkeypatch.setattr(simulation_mod, "_create_web3", _mock_w3_factory())
+
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            data="0x",
+            mode="deep",
+        )
+        report = await run_simulation(req)
+        assert fake.terminated, "anvil subprocess was not cleaned up"
+        assert any(f.id == "sim:deep-unavailable" for f in report.findings)
+
+
 class TestRunSimulationNetwork:
     @pytest.mark.network
     @pytest.mark.asyncio
@@ -262,3 +419,17 @@ class TestRunSimulationNetwork:
         assert report.gas_used is not None
         assert report.balance_delta_wei is not None
         assert int(report.balance_delta_wei) <= 0  # sender paid gas
+
+    @pytest.mark.network
+    @pytest.mark.asyncio
+    async def test_live_deep_usdc_honeypot_probe(self):
+        req = SimRequest(
+            to="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # Base mainnet USDC
+            data="0x",
+            mode="deep",
+        )
+        report = await run_simulation(req)
+        assert report.simulator == "anvil-fork:v1"
+        assert not any(
+            f.id == "honeypot:transfer-restricted" for f in report.findings
+        ), report.notes

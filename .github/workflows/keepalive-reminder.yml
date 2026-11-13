@@ -1,0 +1,50 @@
+name: Bazaar keepalive reminder
+
+# The CDP Bazaar drops resources with no settlement for 30 days. This monthly
+# job checks the last settlement time and pings Discord only when no buyer
+# (organic or otherwise) has paid in 25+ days — the reminder to run
+# scripts/index_bazaar.py ($0.01) before the listing lapses.
+on:
+  schedule:
+    - cron: "0 10 1 * *" # 10:00 UTC on the 1st of each month
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      URL: https://preflight--preflight-api-api.us-east.modal.run
+      WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Check last settlement age
+        id: age
+        run: |
+          python3 - "$URL" <<'EOF'
+          import json, os, sys, urllib.request
+          from datetime import datetime, timezone
+          url = sys.argv[1]
+          try:
+              m = json.load(urllib.request.urlopen(f"{url}/metrics", timeout=45)).get("metrics", {})
+              last = m.get("last_settle_at")
+              days = 999 if not last else (datetime.now(timezone.utc)
+                  - datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).days
+          except Exception as e:
+              days, last = 999, f"metrics unreadable: {e}"
+          print(f"days={days}")
+          print(f"last={last}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"days={days}\n")
+          EOF
+
+      - name: Fail loudly when the webhook secret is missing
+        if: env.WEBHOOK == ''
+        run: |
+          echo "::error::DISCORD_WEBHOOK_URL secret is not set — the keepalive reminder cannot be delivered."
+          exit 1
+
+      - name: Remind only when quiet for 25+ days
+        if: steps.age.outputs.days >= 25
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"⏰ Bazaar keepalive: no settlement in ${{ steps.age.outputs.days }} days (last: ${{ steps.age.outputs.last }}). Run \`uv run python scripts/index_bazaar.py\` (spends \$0.01) before the 30-day window lapses, or the Bazaar listing drops. If organic buyers are active, ignore this.\"}" \
+            "$WEBHOOK"

@@ -73,3 +73,19 @@ class TestCalculateScore:
     def test_score_capped_at_100(self):
         many_critical = [_finding("critical", 1.0) for _ in range(20)]
         assert calculate_score(many_critical) == 100.0
+
+    def test_severity_monotonicity(self):
+        """Higher severity must produce a higher score at equal confidence."""
+        severities = ["info", "low", "medium", "high", "critical"]
+        scores = [calculate_score([_finding(sev, 1.0)]) for sev in severities]
+        assert scores == sorted(scores)
+        assert len(set(scores)) == len(scores)
+
+    def test_confidence_monotonicity(self):
+        """Higher confidence must produce a higher (or equal) score for the same severity."""
+        for severity in ("critical", "high", "medium", "low"):
+            scores = [
+                calculate_score([_finding(severity, conf)])
+                for conf in (0.25, 0.5, 0.75, 1.0)
+            ]
+            assert scores == sorted(scores)

@@ -67,3 +67,30 @@ curl -s http://127.0.0.1:8000/metrics         # revenue_base_units incremented
   `[preflight:notify] discord webhook failed: …` without breaking payments.
 - **Sales appear but metrics don't**: settlement didn't confirm — check
   `payment_required_total` vs `settlements_total` in `/metrics`.
+
+## GitHub Actions monitoring (no extra accounts)
+
+The GitHub repository runs two scheduled workflows that post to the **same
+webhook** as sale notifications. No Discord bot, uptime service, or additional
+account is required — GitHub Actions is the scheduler and the Discord webhook is
+the alert channel.
+
+1. **Uptime probe (every 15 minutes).** The workflow checks the production
+   `/health` endpoint and expects the paid-route 402 challenge. On failure it
+   posts a Discord alert; when the service recovers it posts a recovery notice.
+   This is deliberately independent of the API process, so a dead container
+   still produces an alert.
+2. **Monthly keepalive reminder.** If no settlement has been recorded in 25+
+   days, the workflow posts a reminder to check the deployment, payer balance,
+   facilitator status, and Bazaar listing. It is a nudge, not a hard failure.
+
+Both workflows read the webhook from the **GitHub repository secret**
+`DISCORD_WEBHOOK_URL` (Settings → Secrets and variables → Actions → New
+repository secret). The same value is configured in the server's `.env` for
+sale notifications, but GitHub Actions cannot read the repository's `.env`;
+set the secret separately. Keep both copies in sync when rotating the webhook.
+
+Workflow files live in `.github/workflows/` and are added by the arbiter; this
+section documents the expected behaviour and secret location, not the workflow
+YAML. If a workflow is missing or has never run, check the Actions tab and the
+repository secret before changing the webhook.

@@ -17,6 +17,13 @@ import pytest
 from preflight.mcp import server as mcp_server
 from preflight.mcp.server import create_server
 
+
+@pytest.fixture(autouse=True)
+def _clear_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default tests to the key-off path; key tests opt in explicitly."""
+    monkeypatch.delenv("MCP_API_KEY", raising=False)
+    monkeypatch.delenv("PREFLIGHT_API_KEYS", raising=False)
+
 REPORT: dict[str, Any] = {
     "verdict": "block",
     "score": 92.5,
@@ -187,7 +194,8 @@ class _FakeAsyncClient:
         self.last_url = url
         return self._response
 
-    async def get(self, url: str) -> _FakeResponse:
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
+        self.last_headers = headers or {}
         self.last_url = url
         return self._response
 
@@ -204,6 +212,94 @@ async def test_scan_source_sends_dev_header(monkeypatch: pytest.MonkeyPatch) -> 
     result = await mcp_server.scan_source("contract Vault {}", "Vault")
     assert result["verdict"] == "block"
     assert fake.last_headers.get("X-Preflight-Dev") == "bypass"
+    assert fake.last_headers.get("Accept") == "application/json"
+    assert "X-Preflight-Key" not in fake.last_headers
+
+
+async def test_scan_source_sends_api_key_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(200, REPORT))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+    monkeypatch.setenv("MCP_API_KEY", "mcp-secret")
+    monkeypatch.delenv("PREFLIGHT_API_KEYS", raising=False)
+
+    await mcp_server.scan_source("contract Vault {}", "Vault")
+    assert fake.last_headers.get("X-Preflight-Key") == "mcp-secret"
+    assert fake.last_headers.get("Accept") == "application/json"
+
+
+async def test_api_key_falls_back_to_first_preflight_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(200, REPORT))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+    monkeypatch.delenv("MCP_API_KEY", raising=False)
+    monkeypatch.setenv("PREFLIGHT_API_KEYS", "first-key, second-key")
+
+    await mcp_server.scan_source("contract Vault {}", "Vault")
+    assert fake.last_headers.get("X-Preflight-Key") == "first-key"
+
+
+async def test_api_key_401_is_actionable_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(401, {"error": "unauthorized"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    with pytest.raises(mcp_server.ToolError, match="MCP_API_KEY"):
+        await mcp_server.scan_source("contract Vault {}", "Vault")
+
+
+async def test_pricing_negotiates_json_when_root_serves_html_to_star(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET / serves HTML to */* and JSON only when Accept says so."""
+    seen: list[tuple[str | None, dict[str, str]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        accept = request.headers.get("accept")
+        seen.append((accept, dict(request.headers)))
+        if accept == "application/json":
+            return httpx.Response(
+                200,
+                json={"service": "Preflight", "prices": {"POST /v1/scan": "$0.01"}},
+            )
+        return httpx.Response(
+            200,
+            text="<html><body>Preflight landing</body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        mcp_server.httpx,
+        "AsyncClient",
+        lambda *a, **k: real_async_client(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setenv("MCP_API_KEY", "pricing-secret")
+    monkeypatch.delenv("PREFLIGHT_API_KEYS", raising=False)
+
+    result = await mcp_server.pricing()
+    assert result["service"] == "Preflight"
+    assert result["prices"]["POST /v1/scan"] == "$0.01"
+    assert seen[0][0] == "application/json"
+    assert seen[0][1].get("x-preflight-key") == "pricing-secret"
+
+    # The MCP tool itself also parses JSON (not the HTML landing page).
+    tool_result = await create_server().call_tool("preflight_pricing", {})
+    tool_data = json.loads(await _text(tool_result))
+    assert tool_data["prices"]["POST /v1/scan"] == "$0.01"
+
+    # Prove the other negotiation branch is real HTML for a non-JSON client.
+    with httpx.Client(transport=httpx.MockTransport(handler)) as plain:
+        html = plain.get("http://127.0.0.1:8000/")
+    assert html.headers["content-type"].startswith("text/html")
+    assert "landing" in html.text
 
 
 async def test_scan_source_402_raises_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,6 +332,7 @@ async def test_simulate_transaction_sends_dev_header_and_payload(
     assert result["reverted"] is True
     assert fake.last_url.endswith("/v1/sim")
     assert fake.last_headers.get("X-Preflight-Dev") == "bypass"
+    assert fake.last_headers.get("Accept") == "application/json"
     assert fake.last_json == {"to": SIM_REPORT["to"], "data": "0xdeadbeef", "value_wei": "0"}
 
 

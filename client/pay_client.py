@@ -36,12 +36,14 @@ Usage:
     uv run python client/pay_client.py --route sim --deep   # same as sim-deep
     uv run python client/pay_client.py --route project --file A.sol --file B.sol
     uv run python client/pay_client.py --route address-risk --address 0x...
+    uv run python client/pay_client.py --key <api-key>   # optional key layer
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,6 +82,21 @@ DEMO_TRANSFER_AMOUNT = 10**18
 
 _DEV_HEADER = "X-Preflight-Dev"
 _DEV_HEADER_VALUE = "bypass"
+_ACCEPT_HEADER = "Accept"
+_ACCEPT_JSON = "application/json"
+_API_KEY_HEADER = "X-Preflight-Key"
+
+
+def _api_headers(api_key: str | None = None) -> dict[str, str]:
+    """Headers for every Preflight API request.
+
+    Always negotiates JSON (``GET /`` serves HTML to ``*/*`` clients), and adds
+    the optional ``X-Preflight-Key`` when the API-key layer is enabled.
+    """
+    headers = {_ACCEPT_HEADER: _ACCEPT_JSON}
+    if api_key:
+        headers[_API_KEY_HEADER] = api_key
+    return headers
 
 _USDC_ABI = [
     {
@@ -172,6 +189,21 @@ def load_or_create_key(env_file: Path = ENV_FILE) -> tuple[str, bool]:
     key_hex = account.key.hex()
     save_env(env_file, {"CLIENT_PRIVATE_KEY": key_hex})
     return key_hex, True
+
+
+def resolve_api_key(cli_key: str | None = None, env_file: Path = ENV_FILE) -> str | None:
+    """Resolve the optional ``X-Preflight-Key`` value.
+
+    Precedence: ``--key`` → ``PREFLIGHT_API_KEY`` environment → the repo
+    ``.env``. ``None`` means the API-key layer is off and no header is sent.
+    """
+    if cli_key and cli_key.strip():
+        return cli_key.strip()
+    env_value = os.getenv("PREFLIGHT_API_KEY", "").strip()
+    if env_value:
+        return env_value
+    file_value = load_env(env_file).get("PREFLIGHT_API_KEY", "").strip()
+    return file_value or None
 
 
 # ---------------------------------------------------------------------------
@@ -373,20 +405,23 @@ def paid_exchange(
     payload: dict[str, Any],
     private_key_hex: str,
     http_client: httpx.Client,
+    api_key: str | None = None,
 ) -> httpx.Response:
     """Run 402 -> sign -> retry on ``url`` and return the final response.
 
     Raises:
         RuntimeError: When the retry is still a 402 (payment rejected).
     """
-    first = http_client.post(url, json=payload)
+    headers = _api_headers(api_key)
+    first = http_client.post(url, json=payload, headers=headers)
     if first.status_code != 402:
         first.raise_for_status()
         return first
 
     payment_required = parse_payment_required(_headers_dict(first.headers), first.content)
     signed = create_payment(payment_required, private_key_hex)
-    retry = http_client.post(url, json=payload, headers=payment_headers(signed))
+    retry_headers = {**headers, **payment_headers(signed)}
+    retry = http_client.post(url, json=payload, headers=retry_headers)
     if retry.status_code == 402:
         raise RuntimeError(f"payment rejected by {url}: {retry.text[:300]}")
     retry.raise_for_status()
@@ -399,6 +434,7 @@ def post_paid(
     payload: dict[str, Any],
     private_key_hex: str,
     http_client: httpx.Client | None = None,
+    api_key: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run the full x402 flow for ``path`` and return ``(report, settle)``.
 
@@ -408,7 +444,7 @@ def post_paid(
     client = http_client or httpx.Client(timeout=120.0)
     url = f"{api_url.rstrip('/')}{path}"
     try:
-        response = paid_exchange(url, payload, private_key_hex, client)
+        response = paid_exchange(url, payload, private_key_hex, client, api_key=api_key)
         return response.json(), parse_settle_response(_headers_dict(response.headers))
     finally:
         if owns_client:
@@ -421,6 +457,7 @@ def scan_paid(
     contract_name: str | None,
     private_key_hex: str,
     http_client: httpx.Client | None = None,
+    api_key: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run the full x402 flow against ``/v1/scan`` (backwards-compatible wrapper)."""
     return post_paid(
@@ -429,6 +466,7 @@ def scan_paid(
         scan_payload(source, contract_name),
         private_key_hex,
         http_client=http_client,
+        api_key=api_key,
     )
 
 
@@ -437,13 +475,16 @@ def post_dev(
     path: str,
     payload: dict[str, Any],
     http_client: httpx.Client | None = None,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """POST ``path`` in dev mode (server-side DEV_MODE bypass)."""
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=120.0)
     url = f"{api_url.rstrip('/')}{path}"
+    headers = _api_headers(api_key)
+    headers[_DEV_HEADER] = _DEV_HEADER_VALUE
     try:
-        response = client.post(url, json=payload, headers={_DEV_HEADER: _DEV_HEADER_VALUE})
+        response = client.post(url, json=payload, headers=headers)
         if response.status_code == 402:
             raise RuntimeError(
                 "Server returned 402 in dev mode. Start the API with DEV_MODE=1 "
@@ -461,6 +502,7 @@ def scan_dev(
     source: str,
     contract_name: str | None,
     http_client: httpx.Client | None = None,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """POST ``/v1/scan`` in dev mode (backwards-compatible wrapper)."""
     return post_dev(
@@ -468,6 +510,7 @@ def scan_dev(
         ROUTES["scan"].path,
         scan_payload(source, contract_name),
         http_client=http_client,
+        api_key=api_key,
     )
 
 
@@ -580,6 +623,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dev", action="store_true", help="Rely on server DEV_MODE (no wallet).")
     parser.add_argument("--url", default=None, help="API base URL (default PREFLIGHT_API_URL).")
     parser.add_argument(
+        "--key",
+        default=None,
+        help="Optional X-Preflight-Key (default PREFLIGHT_API_KEY env/.env).",
+    )
+    parser.add_argument(
         "--route",
         choices=sorted(ROUTES),
         default=DEFAULT_ROUTE,
@@ -653,6 +701,7 @@ def main() -> None:
 
     api_url = args.url or config().api_url
     route = ROUTES[args.route]
+    api_key = resolve_api_key(args.key)
     try:
         payload = _payload_from_args(args)
     except ValueError as exc:
@@ -660,7 +709,7 @@ def main() -> None:
 
     if args.dev:
         print(f"=== dev mode: POST {api_url}{route.path} ({route.price}, server bypass) ===")
-        report = post_dev(api_url, route.path, payload)
+        report = post_dev(api_url, route.path, payload, api_key=api_key)
         print_result(args.route, report, None)
         return
 
@@ -679,7 +728,7 @@ def main() -> None:
         return
 
     print(f"=== full x402 flow: POST {api_url}{route.path} ({route.price}) ===")
-    report, settle = post_paid(api_url, route.path, payload, private_key_hex)
+    report, settle = post_paid(api_url, route.path, payload, private_key_hex, api_key=api_key)
     print_result(args.route, report, settle)
 
 

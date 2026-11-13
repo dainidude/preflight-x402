@@ -303,6 +303,15 @@ class UsageTracker:
             pass
 
     @staticmethod
+    def ip_identity(request: Request) -> str:
+        """IP(+proxy-hint)+UA identity only — no x-payer: trial quotas can't be
+        rotated by spoofing a payer header (grill finding)."""
+        fwd = request.headers.get("x-forwarded-for", "")
+        client = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+        ua = request.headers.get("user-agent", "")
+        return hashlib.sha256(f"{client}|{ua}".encode()).hexdigest()[:20]
+
+    @staticmethod
     def fingerprint(request: Request) -> str:
         payer = request.headers.get("x-payer")
         if payer:
@@ -396,22 +405,42 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     cfg = config()
     request.state.pf_paid = False
+    # Stable per-client identity: attribution uses the same full value on the
+    # scan and settle paths. x-payer is display metadata only — never trusted
+    # for quotas (grill: rotating it yielded unlimited free trials).
+    ident = usage.fingerprint(request)
+    request.state.pf_agent = ident
     # Production sanity on EVERY paid request: Modal/ASGI never runs __main__,
     # so this is the only place a misconfigured pay_to gets caught (grill #4).
     if not cfg.dev_mode:
         validate_pay_to_address()
+
+    # Optional enterprise API-key layer (default off). When keys are set, paid
+    # routes require a valid X-Preflight-Key in addition to the x402 payment.
+    if cfg.api_keys:
+        provided = request.headers.get("x-preflight-key", "")
+        if provided not in cfg.api_keys:
+            from fastapi.responses import JSONResponse
+
+            collector.record_401(route)
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid or missing X-Preflight-Key"},
+                headers={"WWW-Authenticate": "X-Preflight-Key"},
+            )
 
     if cfg.dev_mode:
         response = await call_next(request)
         response.headers["X-Preflight-Dev"] = "bypass"
         return response
 
-    ident = usage.fingerprint(request)
 
     # Free tier is OPT-IN via explicit header so that x402 crawlers/validators
     # (which never send it) always see the required 402 payment challenge.
+    # Trial quota keys on IP/UA identity ONLY (x-payer is not trusted here).
     free_trial = request.headers.get("x-preflight-free") == "trial"
-    if cfg.free_tier and free_trial and usage.consume_free(ident):
+    trial_ident = usage.ip_identity(request)
+    if cfg.free_tier and free_trial and usage.consume_free(trial_ident):
         if not usage.allow_rate(ident):
             from fastapi.responses import JSONResponse
 
@@ -486,7 +515,7 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
             # facilitator settle responses may omit `amount` or report it
             # inconsistently. Our own ROUTE_PRICES is what the 402 charged.
             amount = _route_amount(route)
-            collector.record_settle(route, amount, settled.payer)
+            collector.record_settle(route, amount, settled.payer, agent=ident)
             from preflight.notify.discord import notify_sale
 
             await notify_sale(route, amount, settled.payer, settled.transaction)

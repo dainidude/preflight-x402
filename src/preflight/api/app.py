@@ -79,27 +79,38 @@ def _now() -> str:
 
 
 @app.get("/")
-async def root() -> dict[str, Any]:
-    return {
-        "service": "Preflight Security API",
-        "version": "0.1.0",
-        "description": "Pay-per-call smart-contract security scans. POST Solidity source, "
-        "receive a severity-scored, EIP-712-attested verdict.",
-        "prices": price_list(),
-        "payment": {
-            "protocol": "x402",
-            "network": config().network,
-            "asset": "USDC",
-            "facilitator": config().facilitator_url,
-        },
-        "endpoints": {
-            "POST /v1/scan": "single-file scan",
-            "POST /v1/scan/project": "multi-file project scan",
-            "POST /v1/address-risk": "address risk heuristics",
-            "GET /llms.txt": "LLM-facing service description",
-            "GET /.well-known/x402.json": "x402 discovery metadata",
-        },
-    }
+async def root(request: Request) -> Response:
+    """Content-negotiated root: JSON for API clients (Accept: application/json),
+    HTML landing (with OG/meta tags) for browsers, scrapers and `*/*` clients —
+    directory scrapers like x402scan read the description from the HTML."""
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return JSONResponse(
+            {
+                "service": "Preflight Security API",
+                "version": "0.1.0",
+                "description": "Pay-per-call smart-contract security scans. POST Solidity source, "
+                "receive a severity-scored, EIP-712-attested verdict.",
+                "prices": price_list(),
+                "payment": {
+                    "protocol": "x402",
+                    "network": config().network,
+                    "asset": "USDC",
+                    "facilitator": config().facilitator_url,
+                },
+                "endpoints": {
+                    "POST /v1/scan": "single-file scan",
+                    "POST /v1/sim": "transaction simulation",
+                    "POST /v1/sim/deep": "deep simulation (anvil fork)",
+                    "POST /v1/scan/project": "multi-file project scan",
+                    "POST /v1/address-risk": "address risk heuristics",
+                    "GET /llms.txt": "LLM-facing service description",
+                    "GET /.well-known/x402.json": "x402 discovery metadata",
+                    "GET /metrics": "funnel/revenue metrics",
+                },
+            }
+        )
+    return _serve_public("landing.html", media_type="text/html")
 
 
 @app.get("/health")
@@ -161,7 +172,11 @@ async def scan_source(request: ScanRequest, raw: Request) -> Response:
         _get_run_analysis(), request.source, request.contract_name, request.solc_version
     )
     return _finalize(
-        report, route="POST /v1/scan", paid=getattr(raw.state, "pf_paid", False), cache_key=sha
+        report,
+        route="POST /v1/scan",
+        paid=getattr(raw.state, "pf_paid", False),
+        cache_key=sha,
+        agent=getattr(raw.state, "pf_agent", None),
     )
 
 
@@ -186,6 +201,7 @@ async def scan_project(request: ProjectScanRequest, raw: Request) -> Response:
         route="POST /v1/scan/project",
         paid=getattr(raw.state, "pf_paid", False),
         cache_key=files_key,
+        agent=getattr(raw.state, "pf_agent", None),
     )
 
 
@@ -216,7 +232,10 @@ def _finalize_sim(report: SimReport, route: str, raw: Request) -> Response:
         body["attestation"] = sign_report(body)
     from preflight.api.metrics import collector
 
-    collector.record_scan(route, report.verdict, getattr(raw.state, "pf_paid", False))
+    collector.record_scan(
+        route, report.verdict, getattr(raw.state, "pf_paid", False),
+        agent=getattr(raw.state, "pf_agent", None),
+    )
     return JSONResponse(body)
 
 
@@ -260,7 +279,10 @@ def address_risk(request: AddressRiskRequest, raw: Request) -> Response:
     body["attestation"] = sign_report(body)
     from preflight.api.metrics import collector
 
-    collector.record_scan("POST /v1/address-risk", verdict, getattr(raw.state, "pf_paid", False))
+    collector.record_scan(
+        "POST /v1/address-risk", verdict, getattr(raw.state, "pf_paid", False),
+        agent=getattr(raw.state, "pf_agent", None),
+    )
     return JSONResponse(body)
 
 
@@ -284,6 +306,7 @@ def _finalize(
     route: str = "POST /v1/scan",
     paid: bool = False,
     cache_key: str | None = None,
+    agent: str | None = None,
 ) -> Response:
     body = report.model_dump(mode="json")
     if body.get("attestation") is None:
@@ -291,7 +314,7 @@ def _finalize(
     _cache.put(cache_key or report.source_sha256, body)
     from preflight.api.metrics import collector
 
-    collector.record_scan(route, report.verdict, paid)
+    collector.record_scan(route, report.verdict, paid, agent=agent)
     return JSONResponse(body)
 
 

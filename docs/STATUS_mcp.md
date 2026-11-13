@@ -206,3 +206,24 @@ uv run python client/pay_client.py --route sim --deep
 - Batch-settlement recommendation: **no-go for v2 launch**; revisit as an
   opt-in high-frequency scheme once facilitator support, volume, and durable
   channel storage justify escrow/refund operations.
+
+## Wave 3 — Accept negotiation, API-key surface, monitoring docs
+
+- `src/preflight/mcp/server.py` — every API call (`scan_source`,
+  `simulate_transaction`, `pricing`) now sends `Accept: application/json`.
+  Added optional `X-Preflight-Key` from `MCP_API_KEY`, falling back to the first
+  entry in `PREFLIGHT_API_KEYS`; unset = no header, behavior unchanged. 401/403
+  now surface an actionable `ToolError`.
+- `client/pay_client.py` — Accept header on both the initial 402 and the paid
+  retry, plus dev requests. Added `--key` (precedence: CLI → `PREFLIGHT_API_KEY`
+  env → `.env`) and `X-Preflight-Key` on all API requests when configured.
+- `public/llms.txt` — documents the optional API-key layer and client/MCP key
+  sources; pricing/mainnet facts remain aligned with `public/landing.html`.
+- `docs/DISCORD_SETUP.md` — new “GitHub Actions monitoring (no extra accounts)”
+  section covering the 15-minute uptime/recovery workflow, the monthly
+  settlement-keepalive reminder, and the `DISCORD_WEBHOOK_URL` repo secret.
+- Tests: MCP Accept/key-off/key-on/PREFLIGHT_API_KEYS fallback, 401 actionable
+  error, and a `/` negotiation mock proving the pricing tool gets JSON while
+  `*/*` gets HTML; client Accept/key/precedence tests.
+
+Full offline suite: **139 passed, 5 deselected**.
