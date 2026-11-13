@@ -329,14 +329,17 @@ class TestHoneypotProbe:
         assert any("both holder and contract-self transfers reverted" in n for n in notes)
 
     @pytest.mark.asyncio
-    async def test_skipped_when_not_erc20(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_attempts_on_non_token_code(self, monkeypatch: pytest.MonkeyPatch):
+        """Grill fix: the probe no longer gates on static ERC-20 selectors
+        (proxy bytecode hides them); it attempts any deployed code and the
+        transfer calls themselves degrade gracefully for non-tokens."""
         token = "0x" + "34" * 20
         holder = "0x" + "12" * 20
         monkeypatch.setattr(simulation_mod, "_random_address", lambda: holder)
         w3, _ = _mock_w3_for_probe(token, "0x6000", holder)
         findings, notes = _probe_honeypot_transfer(w3, token, SIMULATOR_ADDRESS)
         assert not findings
-        assert any("does not look like an ERC-20" in n for n in notes)
+        assert not any("does not look like an ERC-20" in n for n in notes)
 
     @pytest.mark.asyncio
     async def test_skipped_on_setup_failure(self, monkeypatch: pytest.MonkeyPatch):
