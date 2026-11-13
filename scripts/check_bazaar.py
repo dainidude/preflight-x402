@@ -30,11 +30,13 @@ PAYTO = "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"
 
 
 def bazaar_status() -> str:
-    key = pay_client.load_env(pay_client.ENV_FILE)["CLIENT_PRIVATE_KEY"]
-    kid = os.environ.get("CDP_API_KEY_ID")
-    ksec = os.environ.get("CDP_API_KEY_SECRET")
+    env = pay_client.load_env(pay_client.ENV_FILE)
+    key = env["CLIENT_PRIVATE_KEY"]
+    # .env first so the script works without manual sourcing; real env wins
+    kid = os.environ.get("CDP_API_KEY_ID") or env.get("CDP_API_KEY_ID")
+    ksec = os.environ.get("CDP_API_KEY_SECRET") or env.get("CDP_API_KEY_SECRET")
     if not (kid and ksec):
-        return "CDP keys not in env (source .env)"
+        return "CDP keys not found (.env or environment)"
     from cdp.x402 import create_facilitator_config
     from x402.http.facilitator_client import HTTPFacilitatorClient
 
@@ -59,6 +61,36 @@ def bazaar_status() -> str:
         if not ext:
             return f"verify {r.status_code}, no extension responses"
         return f"verify {r.status_code} → {json.loads(base64.b64decode(ext)).get('bazaar')}"
+
+
+def merchant_catalog() -> str:
+    """Authenticated query: our wallet's resources in the CDP catalog."""
+    env = pay_client.load_env(pay_client.ENV_FILE)
+    kid = os.environ.get("CDP_API_KEY_ID") or env.get("CDP_API_KEY_ID")
+    ksec = os.environ.get("CDP_API_KEY_SECRET") or env.get("CDP_API_KEY_SECRET")
+    if not (kid and ksec):
+        return "CDP keys missing"
+    from cdp.auth import get_auth_headers, GetAuthHeadersOptions
+
+    last = "no attempt made"
+    for path in (
+        f"/platform/v2/x402/discovery/resources?payTo={PAYTO}&limit=50",
+        f"/platform/v2/x402/discovery/resources?type=http&payTo={PAYTO}&limit=50",
+    ):
+        hdrs = get_auth_headers(GetAuthHeadersOptions(
+            api_key_id=kid, api_key_secret=ksec,
+            request_method="GET", request_host="api.cdp.coinbase.com",
+            request_path=path.split("?")[0], source="x402",
+        ))
+        req = urllib.request.Request("https://api.cdp.coinbase.com" + path, headers=hdrs)
+        try:
+            items = json.load(urllib.request.urlopen(req, timeout=60)).get("items", [])
+            ours = [i for i in items if PAYTO in json.dumps(i)]
+            if ours or not items:
+                return f"{len(ours)} of {len(items)} items for our wallet"
+        except Exception as e:
+            last = str(e)[:80]
+    return f"query failed: {last}"
 
 
 def public_catalog() -> int:
@@ -97,8 +129,9 @@ def validate_index() -> str:
 
 if __name__ == "__main__":
     print("1. facilitator bazaar status:", bazaar_status())
-    print("2. public catalog entries for our wallet:", public_catalog(), "(curated 500-slice)")
-    print("3. onyx mirror mentions:", onyx_mirror())
-    print("4. coinbase validate:", validate_index())
+    print("2. authenticated merchant catalog:", merchant_catalog())
+    print("3. public catalog entries for our wallet:", public_catalog(), "(curated 500-slice)")
+    print("4. onyx mirror mentions:", onyx_mirror())
+    print("5. coinbase validate:", validate_index())
     print("\n'processing' = accepted, cataloging is async on Coinbase's side.")
     print("A settled payment already exists (tx 0x157a96b2…). Re-run this script later.")
