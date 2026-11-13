@@ -86,8 +86,11 @@ def merchant_catalog() -> str:
         try:
             items = json.load(urllib.request.urlopen(req, timeout=60)).get("items", [])
             ours = [i for i in items if PAYTO in json.dumps(i)]
-            if ours or not items:
-                return f"{len(ours)} of {len(items)} items for our wallet"
+            return (
+                f"{len(ours)} of {len(items)} items for our wallet"
+                if ours
+                else f"endpoint ignores payTo (returned {len(items)} general items, 0 ours)"
+            )
         except Exception as e:
             last = str(e)[:80]
     return f"query failed: {last}"

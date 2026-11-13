@@ -50,7 +50,7 @@ With a **permanent** URL live (x402scan rejects ephemeral tunnel URLs):
 
 1. Verify from outside: `curl -i <PERMANENT_URL>/v1/scan -d '{"source":"contract A{}"}' -H 'Content-Type: application/json'` → must be `402` with `PAYMENT-REQUIRED`.
 2. Submit to the directories:
-   - **x402scan.com/resources/register** — paste the permanent URL (30 s)
+   - ✅ **x402scan** — LIVE: https://www.x402scan.com/server/1961af3d-afed-400b-bc57-ca4ebe41ef18 (all 5 paid routes indexed)
    - **Bazaar** — server extension already registered (`x402.extensions.bazaar`); CDP indexes by `payTo`
    - **agentic.market**, **pay.sh**, **x402-list.com**
    - **awesome-agentic-commerce** — PR #883 open

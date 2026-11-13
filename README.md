@@ -55,6 +55,10 @@ public/    llms.txt + .well-known/x402.json (discovery)
 - **Attestations**: EIP-712 over `(source_sha256, verdict, findings_root)` — buyers can prove what we said.
 - **Determinism**: static analysis + `eth_call` simulation; verdicts are reproducible.
 
+## Listing
+
+- **x402scan**: https://www.x402scan.com/server/1961af3d-afed-400b-bc57-ca4ebe41ef18 (all 5 paid routes indexed)
+
 ## Docs
 
 - `AGENTS.md` — ownership map & interface contract
