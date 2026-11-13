@@ -295,6 +295,10 @@ def create_http_app():
 
     server = create_server()
     mcp_app = server.streamable_http_app(
+        stateless_http=True,  # tools are stateless API calls; no server-side session
+        # state → directory health checkers that cache session IDs never hit
+        # "Session not found" (was the Glama unhealthy flag); clients that send
+        # session headers simply don't need them.
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=False,  # wildcard origins unsupported by the SDK; CORS below
         ),
