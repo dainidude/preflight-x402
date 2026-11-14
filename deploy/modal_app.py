@@ -33,6 +33,11 @@ DEPLOY_ENV = {
     # CDP Facilitator (set ⇒ verify/settle via Coinbase KYT/OFAC + Bazaar indexing)
     "CDP_API_KEY_ID": os.getenv("CDP_API_KEY_ID", ""),
     "CDP_API_KEY_SECRET": os.getenv("CDP_API_KEY_SECRET", ""),
+    # X (Twitter) auto-post credentials for the trending-verdicts cron
+    "X_API_KEY": os.getenv("X_API_KEY", ""),
+    "X_API_SECRET": os.getenv("X_API_SECRET", ""),
+    "X_ACCESS_TOKEN": os.getenv("X_ACCESS_TOKEN", ""),
+    "X_ACCESS_TOKEN_SECRET": os.getenv("X_ACCESS_TOKEN_SECRET", ""),
     # Durable state on a Modal Volume: metrics/quotas survive redeploys
     "STATE_DIR": "/data/state",
     "PREFLIGHT_API_URL": "https://preflight--preflight-api-api.us-east.modal.run",
