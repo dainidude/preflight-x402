@@ -51,20 +51,22 @@ async def test_scan_trending_tokens_format(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(trending, "get_trending_base_tokens", fake_get_trending)
     monkeypatch.setattr(trending, "run_token_risk", fake_run_token_risk)
 
-    reports = await scan_trending_tokens(3)
-    assert len(reports) == 2
+    results = await scan_trending_tokens(3)
+    assert len(results) == 2
     assert calls == ["0x" + "11" * 20, "0x" + "22" * 20]
-    assert any("MOON" in note for note in reports[0].notes)
-    assert reports[1].verdict == "block"
+    assert results[0]["symbol"] == "MOON"
+    assert results[0]["report"].verdict == "looks_ok"
+    assert results[1]["symbol"] == "RUG"
+    assert results[1]["report"].verdict == "block"
 
 
 def test_format_trending_cards() -> None:
-    reports = [
-        _make_report("looks_ok", "Token: SAFE (0x1111…1111)", "no tax"),
-        _make_report("review", "Token: SUS (0x2222…2222)", "owner can pause"),
-        _make_report("block", "Token: RUG (0x3333…3333)", "honeypot transfer restricted"),
+    results = [
+        {"symbol": "SAFE", "address": "0x" + "11" * 20, "report": _make_report("looks_ok", "Token: SAFE", "no tax")},
+        {"symbol": "SUS", "address": "0x" + "22" * 20, "report": _make_report("review", "Token: SUS", "owner can pause")},
+        {"symbol": "RUG", "address": "0x" + "33" * 20, "report": _make_report("block", "Token: RUG", "honeypot transfer restricted")},
     ]
-    text = format_trending_cards(reports)
+    text = format_trending_cards(results)
     assert text.startswith("📈 Trending Base tokens:")
     assert "✅ SAFE: looks_ok" in text
     assert "⚠️ SUS: review" in text
