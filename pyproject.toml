@@ -16,6 +16,8 @@ dependencies = [
     "web3>=6.19",
     "slither-analyzer>=0.10",
     "py-solc-x>=2.0",
+    "tweepy>=4.17.0",
+    "playwright>=1.65.2",
 ]
 
 [project.optional-dependencies]

@@ -1,68 +1,12 @@
 """Post verdict cards to X (Twitter) from the daily digest.
 
-Uses OAuth 1.0a (the X API's user-context signing) with the four credentials
-from the app's "Keys and Tokens" page. No new pip deps — the signing is
-hand-rolled stdlib (the same method twauth uses, implemented in ~40 lines).
-
+Uses tweepy (OAuth 1.0a handled correctly by the standard X library).
 Free tier allows ~500 posts/month; we post at most 3/day (trending verdicts).
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
-import time
-import urllib.parse
-import uuid
-from typing import Any
-
-import httpx
-
-_API_URL = "https://api.twitter.com/2/tweets"
-
-
-def _oauth1_header(
-    method: str,
-    url: str,
-    params: dict[str, str],
-    api_key: str,
-    api_secret: str,
-    access_token: str,
-    access_token_secret: str,
-) -> str:
-    """Build an OAuth 1.0a Authorization header (HMAC-SHA1 signing)."""
-
-    def enc(s: str) -> str:
-        return urllib.parse.quote(s, safe="")
-
-    oauth_params: dict[str, str] = {
-        "oauth_consumer_key": api_key,
-        "oauth_nonce": uuid.uuid4().hex,
-        "oauth_signature_method": "HMAC-SHA1",
-        "oauth_timestamp": str(int(time.time())),
-        "oauth_token": access_token,
-        "oauth_version": "1.0",
-        **{f"oauth_{k}": v for k, v in params.items()},
-    }
-
-    # Signature base: METHOD&url&sorted-encoded-params
-    sorted_params = "&".join(f"{enc(k)}={enc(v)}" for k, v in sorted(oauth_params.items()))
-    base_string = f"{method}&{enc(url)}&{enc(sorted_params)}"
-
-    signing_key = f"{enc(api_secret)}&{enc(access_token_secret)}"
-    signature = hmac.new(
-        signing_key.encode(), base_string.encode(), hashlib.sha1
-    ).digest()
-    # RFC 2045 base64 without padding
-    import base64
-
-    sig_b64 = base64.b64encode(signature).decode().rstrip("=")
-
-    oauth_params["oauth_signature"] = sig_b64
-
-    header = "OAuth " + ", ".join(f'{enc(k)}="{enc(v)}"' for k, v in sorted(oauth_params.items()))
-    return header
 
 
 async def post_tweet(text: str, max_retries: int = 2) -> str | None:
@@ -80,20 +24,22 @@ async def post_tweet(text: str, max_retries: int = 2) -> str | None:
         print("[x_post] X credentials not configured — skipping")
         return None
 
-    # X v2 endpoint takes JSON body, params go in the URL
-    url = f"{_API_URL}?text={urllib.parse.quote(text)}"
-    auth = _oauth1_header("POST", _API_URL, {"text": urllib.parse.quote(text)},
-                          api_key, api_secret, access_token, access_secret)
+    import time
+
+    import tweepy
 
     for attempt in range(max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(_API_URL, headers={"Authorization": auth},
-                                        json={"text": text})
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                return data.get("data", {}).get("id")
-            print(f"[x_post] X API returned {resp.status_code}: {resp.text[:200]}")
+            client = tweepy.Client(
+                consumer_key=api_key,
+                consumer_secret=api_secret,
+                access_token=access_token,
+                access_token_secret=access_secret,
+            )
+            resp = client.create_tweet(text=text)
+            if resp.data:
+                return str(resp.data.get("id", ""))
+            print(f"[x_post] X API returned: {resp}")
             return None
         except Exception as exc:
             if attempt < max_retries:
