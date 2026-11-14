@@ -230,6 +230,60 @@ async def verify(digest: str = "", attestation: str = "") -> Response:
     return JSONResponse(result)
 
 
+@app.api_route("/verdicts", methods=["GET", "HEAD"])
+async def verdicts() -> Response:
+    """Free: the latest trending-token verdicts (public social proof).
+
+    Content-negotiated: JSON for agents (Accept: application/json),
+    a minimal HTML card list for browsers and search engines.
+    """
+    import json as _json
+    from pathlib import Path
+
+    accept = request.headers.get("accept", "")
+    verdicts: list[dict] = []
+    try:
+        vf = Path("/data/state/verdicts.json")
+        if vf.exists():
+            verdicts = _json.loads(vf.read_text())
+    except Exception:
+        verdicts = []
+
+    from starlette.requests import Request  # noqa: F811
+
+    r = Request(scope=request.scope, receive=request._receive)
+    if "application/json" in accept:
+        return JSONResponse({"verdicts": verdicts, "total": len(verdicts)})
+
+    # HTML for browsers/crawlers — the SEO surface
+    emoji = {"looks_ok": "✅", "review": "⚠️", "block": "🚨"}
+    cards = []
+    for v in verdicts[:30]:
+        e = emoji.get(v["verdict"], "❓")
+        cards.append(
+            f'<div style="padding:12px 16px;border-bottom:1px solid #2a2820;">'
+            f'<span style="font-size:1.4em">{e}</span> '
+            f'<strong style="color:#FFB000">{v["symbol"]}</strong> '
+            f'<span style="color:#8a8578">({v["address"][:6]}…)</span> — '
+            f'<span style="color:{"#00c853" if v["verdict"]=="looks_ok" else "#ffb300" if v["verdict"]=="review" else "#ff5252"}">{v["verdict"]}</span>'
+            + (f' — {v["top_finding"]}' if v.get("top_finding") else "")
+            + f'<br><small style="color:#8a8578">{v["scanned_at"]}</small></div>'
+        )
+    body = (
+        "<!DOCTYPE html><html><head><title>Preflight — latest Base token verdicts</title>"
+        '<meta name="description" content="Daily attested security verdicts for trending Base tokens: honeypot checks, transfer tax, owner privileges. Pay-per-call via x402.">'
+        "<style>body{font-family:monospace;background:#0A0A08;color:#d8d4c8;max-width:720px;margin:0 auto;padding:2rem}"
+        "h1{color:#FFB000}a{color:#FFB000}</style></head><body>"
+        "<h1>Preflight verdicts</h1>"
+        "<p>Attested security checks on trending Base tokens. "
+        '<a href="/llms.txt">Check any token for $0.05</a> — no signup, pay per call in USDC.</p>'
+        + "".join(cards)
+        + '<p style="margin-top:2rem"><a href="https://preflight--preflight-api-api.us-east.modal.run">Try Preflight →</a></p>'
+        "</body></html>"
+    )
+    return Response(content=body, media_type="text/html")
+
+
 @app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
 async def robots() -> Response:
     return PlainTextResponse(

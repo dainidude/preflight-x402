@@ -106,16 +106,65 @@ def mcp():
     return create_http_app()
 
 
+def _extract_verdicts(reports: list) -> list[dict]:
+    """Convert ScanReports to the serializable verdict dicts for /verdicts."""
+    import re as _re
+
+    out: list[dict] = []
+    for report in reports:
+        symbol, address = "UNKNOWN", ""
+        for note in report.notes:
+            if note.startswith("Token:"):
+                m = _re.search(r"Token:\s+(\S+)\s+\((0x[a-fA-F0-9]+)\)", note)
+                if m:
+                    symbol = m.group(1)
+                    address = m.group(2)
+                break
+        out.append({
+            "symbol": symbol,
+            "address": address,
+            "verdict": report.verdict,
+            "score": report.score,
+            "expires_at": report.expires_at,
+            "top_finding": report.findings[0].title if report.findings else None,
+            "scanned_at": report.scanned_at,
+        })
+    return out
+
+
+def _save_verdicts(verdicts: list[dict]) -> None:
+    """Append to /data/state/verdicts.json (dedupe by address+timestamp, keep ~90)."""
+    import json as _json
+    from pathlib import Path
+
+    vf = Path("/data/state/verdicts.json")
+    vf.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict] = []
+    try:
+        existing = _json.loads(vf.read_text())
+    except Exception:
+        pass
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for v in verdicts + existing:
+        key = f"{v['address']}:{v['scanned_at']}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(v)
+    vf.write_text(_json.dumps(deduped[:90], indent=2))
+
+
 @app.function(
     image=image,
     secrets=[modal.Secret.from_dict(DEPLOY_ENV)],
     volumes={"/data": _state_volume},
     schedule=modal.Cron("0 9 * * *"),
-    timeout=120,
+    timeout=300,
 )
 def daily_digest() -> None:
     """09:00 UTC daily: funnel summary + trending-token verdicts to Discord."""
     import asyncio
+    from pathlib import Path
 
     import httpx
 
@@ -127,18 +176,16 @@ def daily_digest() -> None:
     if not (api_url and webhook):
         print("digest: PREFLIGHT_API_URL or DISCORD_WEBHOOK_URL missing — skipping")
         return
+    text = ""
     try:
         metrics = httpx.get(f"{api_url}/metrics", timeout=30.0).raise_for_status().json()
         text = format_digest(metrics.get("metrics", {}))
     except Exception as exc:
-        try:
-            httpx.post(webhook, json={"content": f"Preflight daily digest failed: {exc}"}, timeout=15.0)
-        except Exception:
-            pass
-        return
+        text = f"Digest metrics fetch failed: {exc}"
 
     try:
         trending_reports = asyncio.run(scan_trending_tokens(3))
+        _save_verdicts(_extract_verdicts(trending_reports))
         cards = format_trending_cards(trending_reports)
         if cards:
             text += "\n\n" + cards
@@ -152,6 +199,42 @@ def daily_digest() -> None:
             httpx.post(webhook, json={"content": f"Preflight daily digest failed: {exc}"}, timeout=15.0)
         except Exception:
             pass
+
+
+@app.function(
+    image=image,
+    secrets=[modal.Secret.from_dict(DEPLOY_ENV)],
+    volumes={"/data": _state_volume},
+    schedule=modal.Cron("10 9 * * *"),  # 10 min after the digest — verdicts are fresh
+    timeout=120,
+)
+def post_verdicts_to_x() -> None:
+    """Post each trending verdict to X (Preflight account)."""
+    import asyncio
+    from pathlib import Path
+
+    from preflight.notify.x_post import format_verdict_tweet, post_tweet
+
+    verdicts_file = Path("/data/state/verdicts.json")
+    if not verdicts_file.exists():
+        print("no verdicts stored yet — skipping")
+        return
+
+    import json
+    verdicts = json.loads(verdicts_file.read_text())
+    today = verdicts[:3]  # the most recent scan
+    for v in today:
+        tweet = format_verdict_tweet(
+            symbol=v["symbol"],
+            verdict=v["verdict"],
+            top_finding=v.get("top_finding") or "no findings",
+            address=v["address"],
+        )
+        tweet_id = asyncio.run(post_tweet(tweet))
+        if tweet_id:
+            print(f"posted: {v['symbol']} → {tweet_id}")
+        else:
+            print(f"failed: {v['symbol']}")
 
 
 @app.function(
