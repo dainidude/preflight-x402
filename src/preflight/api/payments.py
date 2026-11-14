@@ -57,6 +57,8 @@ FREE_ROUTES = {
     "GET /favicon.svg",
     "GET /.well-known/x402.json",
     "GET /.well-known/x402",
+    "GET /robots.txt",
+    "GET /v1/verify",
 }
 
 # route -> (price, description)
@@ -67,6 +69,7 @@ ROUTE_PRICES: dict[str, tuple[str, str]] = {
     "POST /v1/scan/project": ("$0.10", "Multi-file project security scan"),
     "POST /v1/address-risk": ("$0.005", "Address risk heuristics"),
     "POST /v1/token-risk": ("$0.05", "Token risk by address: honeypot verdict, transfer tax, owner privileges"),
+    "POST /v1/bundle": ("$0.15", "Bundle: token-risk + address-risk + (optional) source scan in one call"),
 }
 
 FREE_TIER_DAILY = 10

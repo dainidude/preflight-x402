@@ -183,6 +183,39 @@ async def favicon() -> Response:
     return _serve_public("favicon.svg", media_type="image/svg+xml")
 
 
+@app.api_route("/v1/verify", methods=["GET"], include_in_schema=False)
+async def verify(digest: str = "", attestation: str = "") -> Response:
+    """Free: verify a Preflight attestation against a source digest.
+
+    Query params: digest (the source_sha256 from a report) + attestation (the
+    attestation JSON from that report). Returns the verification result.
+    """
+    import json as _json
+
+    from preflight.attestation import verify_report
+
+    if not digest or not attestation:
+        return JSONResponse(
+            {"error": "digest and attestation params are required"}, status_code=422
+        )
+    try:
+        att = _json.loads(attestation)
+    except _json.JSONDecodeError:
+        return JSONResponse({"error": "attestation must be valid JSON"}, status_code=422)
+    report = {"source_sha256": digest, "verdict": att.get("message", {}).get("verdict", "")}
+    valid = verify_report(report, att)
+    result = {
+        "valid": valid,
+        "signer": att.get("signer"),
+        "verdict": att.get("message", {}).get("verdict"),
+        "source_sha256": digest,
+        "checked_at": _now(),
+    }
+    if not valid:
+        result["reason"] = "signature does not match the digest, or the report shape is invalid"
+    return JSONResponse(result)
+
+
 @app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
 async def robots() -> Response:
     return PlainTextResponse(
@@ -439,6 +472,7 @@ _PAID_PATHS: dict[str, str] = {  # path -> USD amount
     "/v1/scan/project": "0.10",
     "/v1/address-risk": "0.005",
     "/v1/token-risk": "0.05",
+    "/v1/bundle": "0.15",
 }
 
 
