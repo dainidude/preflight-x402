@@ -241,13 +241,25 @@ async def verdicts(raw: Request) -> Response:
     from pathlib import Path
 
     accept = raw.headers.get("accept", "")
-    verdicts: list[dict] = []
+    all_verdicts: list[dict] = []
     try:
         vf = Path("/data/state/verdicts.json")
         if vf.exists():
-            verdicts = _json.loads(vf.read_text())
+            all_verdicts = _json.loads(vf.read_text())
     except Exception:
-        verdicts = []
+        all_verdicts = []
+
+    # Deduplicate: show only the LATEST verdict per token address (stale
+    # pre-fix entries for the same token shouldn't appear alongside the
+    # current verdict).
+    seen: dict[str, dict] = {}
+    for v in all_verdicts:
+        addr = v.get("address", "").lower()
+        if not addr or addr not in seen:
+            seen[addr] = v
+        # all_verdicts is newest-first (digest prepends), so the first
+        # entry per address IS the latest — later ones are stale.
+    verdicts = list(seen.values())
 
     if "application/json" in accept:
         return JSONResponse({"verdicts": verdicts, "total": len(verdicts)})
