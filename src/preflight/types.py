@@ -121,6 +121,7 @@ class SimReport(BaseModel):
     simulated_at: str = Field(description="ISO-8601 UTC timestamp")
     simulator: str = Field(description="e.g. 'rpc-ethcall:v1' or 'anvil-fork:v1'")
     attestation: dict[str, Any] | None = None
+    expires_at: str | None = Field(default=None, description="ISO-8601 UTC; verdict expiry for clean results (stale after this)")
     notes: list[str] = Field(default_factory=list)
 
 
@@ -133,3 +134,14 @@ class TokenRiskRequest(BaseModel):
     """
 
     address: str = Field(min_length=42, max_length=42, description="Token contract address")
+
+
+class BundleRequest(BaseModel):
+    """Body of POST /v1/bundle — combined analysis ($0.15).
+
+    Runs token-risk + address-risk (+ source scan if provided) in one call.
+    43% convenience premium over the $0.105 individual total.
+    """
+
+    address: str = Field(min_length=42, max_length=42, description="Token or contract address to analyze")
+    source: str | None = Field(default=None, max_length=2_000_000, description="Optional Solidity source for a full scan")
