@@ -6,6 +6,7 @@ these models elsewhere. Change requests go through docs/STATUS_*.md.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -24,7 +25,6 @@ SEVERITY_ORDER: dict[str, int] = {
 
 class Finding(BaseModel):
     """One security finding produced by a detector."""
-
     id: str = Field(description="Stable detector id, e.g. 'reentrancy-no-eth' or 'custom:fee-on-transfer'")
     title: str
     severity: Severity
@@ -37,7 +37,6 @@ class Finding(BaseModel):
 
 class ScanRequest(BaseModel):
     """Body of POST /v1/scan."""
-
     source: str = Field(min_length=1, max_length=2_000_000, description="Solidity source (single file)")
     contract_name: str | None = Field(default=None, description="Target contract if source has several")
     solc_version: str | None = Field(default=None, description="e.g. '0.8.20'; auto-detected from pragma when omitted")
@@ -45,7 +44,6 @@ class ScanRequest(BaseModel):
 
 class ScanReport(BaseModel):
     """The product: a signed, severity-scored security verdict."""
-
     verdict: Verdict
     score: float = Field(ge=0.0, le=100.0, description="0 = clean, 100 = certainly dangerous")
     findings: list[Finding] = Field(default_factory=list)
@@ -56,11 +54,14 @@ class ScanReport(BaseModel):
     source_sha256: str = Field(description="SHA-256 of the analyzed source (the cache key)")
     attestation: dict[str, Any] | None = Field(default=None, description="EIP-712 attestation from attestation.sign_report, when configured")
     notes: list[str] = Field(default_factory=list, description="Caveats, e.g. 'simulation tier not included in v1'")
+    expires_at: str | None = Field(
+        default=None,
+        description="ISO-8601 UTC; verdict expiry for clean results (stale after this)",
+    )
 
 
 class ProjectScanRequest(BaseModel):
     """Body of POST /v1/scan/project (multi-file)."""
-
     files: dict[str, str] = Field(min_length=1, max_length=64, description="file name -> Solidity source")
     contract_name: str | None = None
     solc_version: str | None = None
@@ -68,7 +69,6 @@ class ProjectScanRequest(BaseModel):
 
 class AddressRiskRequest(BaseModel):
     """Body of POST /v1/address-risk."""
-
     address: str = Field(min_length=42, max_length=42)
 
 
@@ -91,7 +91,6 @@ class SimRequest(BaseModel):
     quick (eth_call) or deep (local anvil fork: gas, balance deltas, traces).
     The /v1/sim/deep endpoint forces mode="deep" server-side.
     """
-
     to: str = Field(min_length=42, max_length=42)
     data: str | None = Field(default=None, pattern=r"^0x[0-9a-fA-F]*$")
     value_wei: str | None = Field(default=None, description="Wei value, decimal string")
@@ -102,7 +101,6 @@ class SimRequest(BaseModel):
 
 class SimReport(BaseModel):
     """Result of a transaction pre-flight simulation."""
-
     verdict: Verdict
     score: float = Field(ge=0.0, le=100.0)
     findings: list[Finding] = Field(default_factory=list)
@@ -132,7 +130,6 @@ class TokenRiskRequest(BaseModel):
     fork probe, transfer tax %, contract sanity, bytecode owner-privilege
     heuristics. Returns the same attested ScanReport shape.
     """
-
     address: str = Field(min_length=42, max_length=42, description="Token contract address")
 
 
@@ -142,6 +139,7 @@ class BundleRequest(BaseModel):
     Runs token-risk + address-risk (+ source scan if provided) in one call.
     43% convenience premium over the $0.105 individual total.
     """
-
     address: str = Field(min_length=42, max_length=42, description="Token or contract address to analyze")
     source: str | None = Field(default=None, max_length=2_000_000, description="Optional Solidity source for a full scan")
+    contract_name: str | None = Field(default=None, description="Target contract name when source has several")
+    solc_version: str | None = Field(default=None, description="e.g. 0.8.20; auto-detected from pragma when omitted")

@@ -114,10 +114,13 @@ def mcp():
     timeout=120,
 )
 def daily_digest() -> None:
-    """09:00 UTC daily: funnel summary to Discord (best-effort, never crashes)."""
+    """09:00 UTC daily: funnel summary + trending-token verdicts to Discord."""
+    import asyncio
+
     import httpx
 
     from preflight.api.state import format_digest
+    from preflight.core.trending import format_trending_cards, scan_trending_tokens
 
     api_url = os.environ.get("PREFLIGHT_API_URL", "").rstrip("/")
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -127,6 +130,22 @@ def daily_digest() -> None:
     try:
         metrics = httpx.get(f"{api_url}/metrics", timeout=30.0).raise_for_status().json()
         text = format_digest(metrics.get("metrics", {}))
+    except Exception as exc:
+        try:
+            httpx.post(webhook, json={"content": f"Preflight daily digest failed: {exc}"}, timeout=15.0)
+        except Exception:
+            pass
+        return
+
+    try:
+        trending_reports = asyncio.run(scan_trending_tokens(3))
+        cards = format_trending_cards(trending_reports)
+        if cards:
+            text += "\n\n" + cards
+    except Exception as exc:
+        text += f"\n\n📈 Trending scan skipped: {exc}"
+
+    try:
         httpx.post(webhook, json={"content": f"```\n{text}\n```"}, timeout=15.0)
     except Exception as exc:
         try:

@@ -1,6 +1,6 @@
 """Preflight MCP server.
 
-Exposes four tools over MCP:
+Exposes six tools over MCP:
 
 * ``preflight_check``  — POST the Solidity source to ``POST /v1/scan`` and
   return the resulting :class:`~preflight.types.ScanReport` JSON. Payments flow
@@ -11,6 +11,9 @@ Exposes four tools over MCP:
   internal calls).
 * ``preflight_token_risk`` — POST a token address to ``POST /v1/token-risk``
   and return the honeypot/tax/owner-privilege verdict as a ``ScanReport``.
+* ``preflight_bundle`` — POST an address (+ optional source) to
+  ``POST /v1/bundle`` for combined token/address/source analysis.
+* ``preflight_verify`` — free ``GET /v1/verify?digest=0x…`` for a past verdict.
 * ``preflight_pricing`` — free ``GET /`` price list.
 
 Run with stdio (default) or streamable HTTP (``--http``):
@@ -25,6 +28,7 @@ import argparse
 import json
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -187,6 +191,57 @@ async def token_risk(address: str) -> dict[str, Any]:
     return report
 
 
+async def bundle_analysis(address: str, source: str | None = None) -> dict[str, Any]:
+    """POST ``/v1/bundle`` and return the combined analysis JSON.
+
+    Args:
+        address: Token or contract address to analyze.
+        source: Optional Solidity source for the source-scan component.
+
+    Raises:
+        ToolError: On a 402 payment-required response, a rejected API key, or
+            any HTTP error.
+    """
+    payload: dict[str, Any] = {"address": address}
+    if source is not None:
+        payload["source"] = source
+
+    url = f"{config().api_url.rstrip('/')}/v1/bundle"
+    async with httpx.AsyncClient(timeout=240.0) as client:
+        response = await client.post(url, json=payload, headers=_api_headers())
+
+    if response.status_code == 402:
+        raise ToolError(
+            "Payment required (402) for POST /v1/bundle ($0.15 USDC on Base "
+            "mainnet). Run the API with DEV_MODE=1 for local use, or run the paying "
+            "demo client: `uv run python client/pay_client.py --route bundle "
+            "--address 0x...`."
+        )
+    if response.status_code in (401, 403):
+        raise ToolError(
+            "API key required or rejected. Set MCP_API_KEY (or share one key from "
+            "PREFLIGHT_API_KEYS) to the value configured on the API."
+        )
+    response.raise_for_status()
+    return response.json()
+
+
+async def verify_digest(digest: str, attestation: str | None = None) -> dict[str, Any]:
+    """GET ``/v1/verify?digest=...`` and return the verification result.
+
+    This is a free discovery/verification route; no payment header is needed.
+    ``attestation`` is optional here for clients that can supply the signed
+    attestation JSON; the API accepts it as a second query parameter.
+    """
+    url = f"{config().api_url.rstrip('/')}/v1/verify?digest={quote(digest, safe='')}"
+    if attestation is not None:
+        url += f"&attestation={quote(attestation, safe='')}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=_api_headers())
+    response.raise_for_status()
+    return response.json()
+
+
 async def pricing() -> dict[str, Any]:
     """GET ``/`` and return the free price list.
 
@@ -256,6 +311,29 @@ def create_server() -> MCPServer:
     async def preflight_token_risk(address: str) -> str:
         report = await token_risk(address)
         return json.dumps(report, indent=2)
+
+    @server.tool(
+        name="preflight_bundle",
+        description=(
+            "Run a combined token-risk, address-risk, and optional source scan "
+            "for one address in a single paid call ($0.15 USDC on Base mainnet). "
+            "Returns the bundle JSON."
+        ),
+    )
+    async def preflight_bundle(address: str, source: str | None = None) -> str:
+        result = await bundle_analysis(address, source)
+        return json.dumps(result, indent=2)
+
+    @server.tool(
+        name="preflight_verify",
+        description=(
+            "Verify a past Preflight attestation by source digest (free). "
+            "Returns the verification result JSON."
+        ),
+    )
+    async def preflight_verify(digest: str, attestation: str | None = None) -> str:
+        result = await verify_digest(digest, attestation)
+        return json.dumps(result, indent=2)
 
     @server.tool(
         name="preflight_pricing",
@@ -346,6 +424,20 @@ def create_http_app():
                         # instead of the SDK's 400 "Missing session ID".
                         await _send_json(_probe_card(), scope, receive, send)
                         return
+                    # The hosted app is stateless_http=True: there is no
+                    # server-side SSE session to attach to. Passing this GET to
+                    # the SDK opens an infinite stream (state checkers/tests
+                    # hang); return an explicit protocol error instead.
+                    await JSONResponse(
+                        {
+                            "error": (
+                                "SSE GET is not supported on this stateless "
+                                "streamable-HTTP endpoint; POST JSON-RPC to /mcp."
+                            )
+                        },
+                        status_code=400,
+                    )(scope, receive, send)
+                    return
             await self.app(scope, receive, send)
 
     return CORSMiddleware(
@@ -363,9 +455,21 @@ def _root_info() -> dict:
         "description": "Pay-per-call smart-contract & token security for AI agents, over MCP.",
         "mcp_endpoint": "https://preflight--preflight-api-mcp.modal.run/mcp",
         "transport": "streamable-http",
-        "tools": ["preflight_check", "preflight_sim", "preflight_token_risk", "preflight_pricing"],
+        "tools": [
+            "preflight_check",
+            "preflight_sim",
+            "preflight_token_risk",
+            "preflight_bundle",
+            "preflight_verify",
+            "preflight_pricing",
+        ],
         "api_origin": "https://preflight--preflight-api-api.us-east.modal.run",
-        "pricing": "scan $0.01 · sim $0.05 · deep sim $0.25 · token-risk $0.05 · project $0.10 · address-risk $0.005 (USDC on Base via x402; first 10 calls/day free with X-Preflight-Free: trial)",
+        "pricing": (
+            "scan $0.01 · sim $0.05 · deep sim $0.25 · token-risk $0.05 · "
+            "bundle $0.15 · project $0.10 · address-risk $0.005 · verify free "
+            "(USDC on Base via x402; first 10 calls/day free with "
+            "X-Preflight-Free: trial)"
+        ),
         "server_card": "/.well-known/mcp/server-card.json",
         "source": "https://github.com/dainidude/preflight-x402",
     }

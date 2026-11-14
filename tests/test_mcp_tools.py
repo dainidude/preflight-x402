@@ -194,6 +194,52 @@ async def test_preflight_token_risk_lists_as_tool(monkeypatch: pytest.MonkeyPatc
     } <= names
 
 
+async def test_preflight_bundle_tool_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+    async def fake_bundle(address: str, source: str | None = None) -> dict[str, Any]:
+        assert address == token
+        assert source == "contract X {}"
+        return {"verdict": "review", "bundle": True}
+
+    monkeypatch.setattr(mcp_server, "bundle_analysis", fake_bundle)
+    server = create_server()
+    result = await server.call_tool(
+        "preflight_bundle", {"address": token, "source": "contract X {}"}
+    )
+    data = json.loads(await _text(result))
+    assert data["bundle"] is True
+
+
+async def test_preflight_verify_tool_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    digest = "0x" + "ab" * 32
+
+    async def fake_verify(digest_value: str, attestation: str | None = None) -> dict[str, Any]:
+        assert digest_value == digest
+        return {"valid": True, "verdict": "block"}
+
+    monkeypatch.setattr(mcp_server, "verify_digest", fake_verify)
+    server = create_server()
+    result = await server.call_tool("preflight_verify", {"digest": digest})
+    data = json.loads(await _text(result))
+    assert data["valid"] is True
+
+
+async def test_new_tools_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_bundle(address: str, source: str | None = None) -> dict[str, Any]:
+        return {}
+
+    async def fake_verify(digest: str, attestation: str | None = None) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(mcp_server, "bundle_analysis", fake_bundle)
+    monkeypatch.setattr(mcp_server, "verify_digest", fake_verify)
+    server = create_server()
+    tools = await server.list_tools()
+    names = {tool.name for tool in tools}
+    assert {"preflight_bundle", "preflight_verify"} <= names
+
+
 class _FakeResponse:
     def __init__(self, status_code: int, json_data: Any, headers: dict[str, str] | None = None) -> None:
         self.status_code = status_code
@@ -214,6 +260,9 @@ class _FakeAsyncClient:
         self.last_headers: dict[str, str] = {}
         self.last_json: Any = None
         self.last_url = ""
+        self.last_method = ""
+        self.post_calls = 0
+        self.get_calls = 0
 
     async def __aenter__(self) -> "_FakeAsyncClient":
         return self
@@ -222,12 +271,16 @@ class _FakeAsyncClient:
         return None
 
     async def post(self, url: str, json: Any = None, headers: dict[str, str] | None = None) -> _FakeResponse:
+        self.post_calls += 1
+        self.last_method = "POST"
         self.last_headers = headers or {}
         self.last_json = json
         self.last_url = url
         return self._response
 
     async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
+        self.get_calls += 1
+        self.last_method = "GET"
         self.last_headers = headers or {}
         self.last_url = url
         return self._response
@@ -427,6 +480,59 @@ async def test_token_risk_402_names_price_and_route(
     assert "--route token-risk" in str(excinfo.value)
 
 
+async def test_verify_digest_uses_get_not_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    digest = "0x" + "ab" * 32
+    fake = _FakeAsyncClient(_FakeResponse(200, {"valid": True, "verdict": "block"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    result = await mcp_server.verify_digest(digest)
+    assert result["valid"] is True
+    assert fake.last_method == "GET"
+    assert fake.post_calls == 0
+    assert fake.get_calls == 1
+    assert fake.last_url.endswith(f"/v1/verify?digest={digest}")
+    assert fake.last_headers.get("Accept") == "application/json"
+
+
+async def test_verify_digest_includes_optional_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digest = "0x" + "cd" * 32
+    fake = _FakeAsyncClient(_FakeResponse(200, {"valid": True}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    await mcp_server.verify_digest(digest, '{"signer":"0x1"}')
+    assert "digest=" in fake.last_url
+    assert "attestation=%7B%22signer%22" in fake.last_url
+
+
+async def test_bundle_posts_address_and_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    fake = _FakeAsyncClient(_FakeResponse(200, {"verdict": "review"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    result = await mcp_server.bundle_analysis(token, "contract X {}")
+    assert result["verdict"] == "review"
+    assert fake.last_method == "POST"
+    assert fake.last_url.endswith("/v1/bundle")
+    assert fake.last_json == {"address": token, "source": "contract X {}"}
+    assert fake.last_headers.get("Accept") == "application/json"
+
+
+async def test_bundle_402_names_price_and_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeAsyncClient(_FakeResponse(402, {"error": "Payment required"}))
+    monkeypatch.setattr(mcp_server, "config", lambda: _cfg(dev_mode=False))
+    monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda *a, **k: fake)
+
+    with pytest.raises(mcp_server.ToolError) as excinfo:
+        await mcp_server.bundle_analysis("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    assert "$0.15" in str(excinfo.value)
+    assert "--route bundle" in str(excinfo.value)
+
+
 async def test_simulate_transaction_402_raises_actionable_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -499,6 +605,8 @@ def test_x402_discovery_real_values() -> None:
     assert doc["pricing"]["POST /v1/address-risk"]["amount"] == "5000"
     assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.05"
     assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
+    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.15"
+    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "150000"
     for route in doc["pricing"].values():
         assert route["network"] == "eip155:8453"
         assert route["asset"] == payment["asset"]
@@ -515,6 +623,7 @@ def test_x402_discovery_bazaar_extensions() -> None:
         "POST /v1/scan/project",
         "POST /v1/address-risk",
         "POST /v1/token-risk",
+        "POST /v1/bundle",
     ):
         extension = bazaar[route]
         assert extension["info"]["input"]["type"] == "http"
@@ -540,6 +649,8 @@ def test_llms_txt_documents_new_surface() -> None:
     assert "/v1/sim" in text
     assert "/v1/sim/deep" in text
     assert "/v1/token-risk" in text
+    assert "/v1/bundle" in text
+    assert "/v1/verify" in text
     assert "$0.25" in text
     assert "anvil" in text
     assert "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" in text

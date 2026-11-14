@@ -8,6 +8,7 @@ x402 handshake via api.payments.x402_payment_middleware.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import datetime, timezone
 from typing import Any
@@ -29,6 +30,7 @@ from preflight.types import (
     ScanRequest,
     SimReport,
     SimRequest,
+    BundleRequest,
     TokenRiskRequest,
 )
 
@@ -204,6 +206,15 @@ async def verify(digest: str = "", attestation: str = "") -> Response:
         return JSONResponse({"error": "attestation must be valid JSON"}, status_code=422)
     report = {"source_sha256": digest, "verdict": att.get("message", {}).get("verdict", "")}
     valid = verify_report(report, att)
+    expires_at = att.get("message", {}).get("expires_at")
+    stale_note = None
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if exp < datetime.now(timezone.utc):
+                stale_note = "stale — re-verify"
+        except (ValueError, TypeError):
+            pass
     result = {
         "valid": valid,
         "signer": att.get("signer"),
@@ -211,6 +222,9 @@ async def verify(digest: str = "", attestation: str = "") -> Response:
         "source_sha256": digest,
         "checked_at": _now(),
     }
+    if stale_note:
+        result["stale"] = True
+        result["note"] = stale_note
     if not valid:
         result["reason"] = "signature does not match the digest, or the report shape is invalid"
     return JSONResponse(result)
@@ -292,6 +306,120 @@ async def token_risk(request: TokenRiskRequest, raw: Request) -> Response:
         cache_key=f"token-risk:{request.address.lower()}",
     )
 
+
+
+
+@app.post("/v1/bundle")
+async def bundle(request: BundleRequest, raw: Request) -> Response:
+    """Bundle: token-risk + address-risk + (optional) source scan. $0.15 via x402."""
+    address = request.address
+    notes: list[str] = []
+    findings: list[Finding] = []
+    scanner_versions: dict[str, str] = {}
+    source_sha256 = hashlib.sha256(address.encode()).hexdigest()
+
+    async def _token_risk():
+        try:
+            return await _call_core(_get_token_risk(), address)
+        except ValueError:
+            return None
+
+    async def _address_risk():
+        try:
+            from web3 import Web3
+            Web3.to_checksum_address(address)
+        except Exception:
+            return None
+        rpc = config().rpc_url
+        if not rpc:
+            return None
+        try:
+            w3 = Web3(Web3.HTTPProvider(rpc))
+            code = w3.eth.get_code(Web3.to_checksum_address(address)) or b""
+            if not code:
+                return None
+            code_hex = code.hex()
+            addr_findings: list[Finding] = []
+            if "363d3d373d3d3d363d73" in code_hex or "3d3d3d3d" in code_hex[:200]:
+                addr_findings.append(Finding(
+                    id="address:minimal-proxy", title="Minimal proxy (EIP-1167-style clone)",
+                    severity="low", confidence=0.7,
+                    description="Bytecode looks like a minimal proxy/clone; the logic lives at another address.",
+                    detector="heuristic:bytecode",
+                ))
+            if "715018a6" in code_hex:
+                addr_findings.append(Finding(
+                    id="address:selfdestruct-selector", title="Self-destruct selector present in bytecode",
+                    severity="medium", confidence=0.5,
+                    description="A kill/selfdestruct selector is reachable; verify it is owner-gated.",
+                    detector="heuristic:bytecode",
+                ))
+            return addr_findings
+        except Exception:
+            return None
+
+    async def _source_scan():
+        if not request.source:
+            return None
+        try:
+            return await _call_core(
+                _get_run_analysis(), request.source, request.contract_name, request.solc_version
+            )
+        except Exception:
+            return None
+
+    token_report, addr_findings, source_report = await asyncio.gather(
+        _token_risk(), _address_risk(), _source_scan()
+    )
+
+    ran: list[str] = []
+    if token_report is not None:
+        ran.append("token-risk")
+        findings.extend(token_report.findings)
+        scanner_versions.update(token_report.scanner_versions)
+        source_sha256 = token_report.source_sha256
+    if addr_findings is not None:
+        ran.append("address-risk")
+        findings.extend(addr_findings)
+    if source_report is not None:
+        ran.append("source-scan")
+        findings.extend(source_report.findings)
+        scanner_versions.update(source_report.scanner_versions)
+        source_sha256 = source_report.source_sha256
+
+    notes.append(f"Bundle ran: {', '.join(ran)}")
+
+    severities = {f.severity for f in findings}
+    if severities & {"critical", "high"}:
+        verdict = "block"
+    elif "medium" in severities:
+        verdict = "review"
+    else:
+        verdict = "looks_ok"
+
+    expires_at: str | None = None
+    if token_report is not None and token_report.verdict == "looks_ok":
+        from datetime import timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(timespec="seconds")
+
+    report = ScanReport(
+        verdict=verdict,
+        score=max([r.score for r in [token_report, source_report] if r is not None] + [0.0]),
+        findings=findings,
+        contract_name=request.contract_name,
+        solc_version=request.solc_version,
+        scanner_versions=scanner_versions,
+        scanned_at=_now(),
+        source_sha256=source_sha256,
+        notes=notes,
+        expires_at=expires_at,
+    )
+    return _finalize(
+        report,
+        route="POST /v1/bundle",
+        paid=getattr(raw.state, "pf_paid", False),
+        agent=getattr(raw.state, "pf_agent", None),
+    )
 
 @app.post("/v1/sim/deep")
 async def sim_deep(request: SimRequest, raw: Request) -> Response:

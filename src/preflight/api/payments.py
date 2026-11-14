@@ -168,6 +168,24 @@ ROUTE_BAZAAR: dict[str, dict] = {
             }
         ),
     ),
+    "POST /v1/bundle": declare_discovery_extension(
+        input={"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "source": "contract Vault {}"},
+        input_schema={
+            "properties": {
+                "address": {"type": "string", "description": "Token or contract address to analyze"},
+                "source": {"type": "string", "description": "Optional Solidity source for a full scan"},
+            },
+            "required": ["address"],
+        },
+        body_type="json",
+        output=OutputConfig(
+            example={
+                "verdict": "block",
+                "notes": ["Bundle ran: token-risk, address-risk"],
+                "findings": [{"id": "token:transfer-tax", "severity": "high"}],
+            }
+        ),
+    ),
     "POST /v1/address-risk": declare_discovery_extension(
         input={"address": "0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41"},
         input_schema={

@@ -228,6 +228,10 @@ def _report(
 ) -> ScanReport:
     if tax_pct is not None:
         notes.insert(0, f"Transfer tax: {tax_pct}%")
+    expires_at: str | None = None
+    if verdict == "looks_ok":
+        from datetime import timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(timespec="seconds")
     return ScanReport(
         verdict=verdict,
         score=score,
@@ -238,4 +242,5 @@ def _report(
         scanned_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         source_sha256=hashlib.sha256(code_hex.encode()).hexdigest(),
         notes=notes,
+        expires_at=expires_at,
     )

@@ -51,6 +51,8 @@
     <tr><td><code>POST /v1/scan/project</code></td><td>Multi-file project scan</td><td>$0.10</td></tr>
     <tr><td><code>POST /v1/address-risk</code></td><td>Address risk heuristics</td><td>$0.005</td></tr>
     <tr><td><code>POST /v1/token-risk</code></td><td>Token risk by address — honeypot, transfer tax, owner privileges</td><td>$0.05</td></tr>
+    <tr><td><code>POST /v1/bundle</code></td><td>Combined token-risk + address-risk + optional source scan</td><td>$0.15</td></tr>
+    <tr><td><code>GET /v1/verify</code></td><td>Verify a past attestation by source digest</td><td>free</td></tr>
   </table>
 
   <h2>Try it</h2>
@@ -58,13 +60,18 @@
   -H 'Content-Type: application/json' \
   -d '{"source":"contract A {}"}'
 # → 402 Payment Required, PAYMENT-REQUIRED header
-# pay via x402 (USDC on Base), retry with PAYMENT-SIGNATURE → verdict</pre>
+# pay via x402 (USDC on Base), retry with PAYMENT-SIGNATURE → verdict
+
+# Verify a past verdict (free)
+curl 'https://preflight--preflight-api-api.us-east.modal.run/v1/verify?digest=0x...&attestation=%7B...%7D'</pre>
 
   <h2>Agent surface</h2>
   <p>Machine-readable everything: <a href="/openapi.json">OpenAPI</a> ·
   <a href="/llms.txt">llms.txt</a> · <a href="/.well-known/x402.json">x402 discovery</a> ·
   <a href="/metrics">/metrics</a> · MCP tools: <code>preflight_check</code>,
-  <code>preflight_sim</code>, <code>preflight_pricing</code>.</p>
+  <code>preflight_sim</code>, <code>preflight_token_risk</code>,
+  <code>preflight_bundle</code>, <code>preflight_verify</code>,
+  <code>preflight_pricing</code>.</p>
 
   <footer>
     Preflight · open source at <a href="https://github.com/dainidude/preflight-x402">github.com/dainidude/preflight-x402</a>

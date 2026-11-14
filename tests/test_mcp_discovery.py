@@ -55,7 +55,11 @@ def test_build_derives_payment_and_every_route_price() -> None:
 
     assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.05"
     assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
-    assert "preflight_token_risk" in doc["mcp"]["tools"]
+    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.15"
+    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "150000"
+    assert doc["endpoints"]["GET /v1/verify"] == "attestation verification (free)"
+    assert "preflight_bundle" in doc["mcp"]["tools"]
+    assert "preflight_verify" in doc["mcp"]["tools"]
 
 
 def test_facilitator_falls_back_without_cdp_credentials() -> None:
@@ -85,4 +89,5 @@ def test_router_serves_generated_json(monkeypatch: pytest.MonkeyPatch) -> None:
     data = response.json()
     assert data["payment"]["pay_to"] == cfg.pay_to_address
     assert data["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
+    assert data["pricing"]["POST /v1/bundle"]["amount"] == "150000"
     assert data["pricing"]["POST /v1/scan"]["amount"] == "10000"

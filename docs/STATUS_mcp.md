@@ -257,3 +257,37 @@ app.include_router(discovery_router)
 ```
 
 Full offline suite: **161 passed, 6 deselected**.
+
+## Wave 5 — verify + bundle surfaces
+
+- `src/preflight/mcp/server.py` — added `preflight_verify {digest, attestation?}`
+  (GET `/v1/verify`, free, Accept/key headers, no payment) and
+  `preflight_bundle {address, source?}` (POST `/v1/bundle`, $0.15, 402/401
+  actionable ToolErrors). Root MCP info lists the new tools. The hosted MCP
+  surface now returns an explicit 400 for stateless SSE GETs instead of
+  forwarding them to an infinite SDK stream.
+- `client/pay_client.py` — `--route bundle --address 0x… [--file contract.sol]`
+  sends `{address, source?}` to `/v1/bundle` at $0.15; included in the mocked
+  paid-route matrix.
+- `public/landing.html` — verify/bundle price rows and a free verify curl
+  example; MCP tool list updated.
+- `public/llms.txt` — verify/bundle rows, bundle request shape, MCP tools, a
+  verify curl example, and the live attester address
+  `0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa`.
+- `public/.well-known/x402.json` / `src/preflight/api/discovery.py` — generated
+  discovery includes `POST /v1/bundle` ($0.15), `GET /v1/verify` free endpoint,
+  and `preflight_bundle`/`preflight_verify` MCP entries; static reference
+  regenerated and equality-tested.
+
+Cross-area requests:
+- Add a `ROUTE_BAZAAR["POST /v1/bundle"]` declaration in `api/payments.py`
+  (mirroring token-risk) so the live 402 carries Bazaar metadata; the generated
+  discovery document already carries one.
+- `_server_card()` in `mcp/server.py` still lists the older four tools because
+  `tests/test_http_surface.py` asserts that exact set; update the arbiter test
+  when the hosted card is refreshed.
+- `/v1/verify` currently requires both `digest` and `attestation` in app.py;
+  the MCP tool takes digest alone per the brief and optionally forwards
+  attestation.
+
+Full offline suite: **200 passed, 7 deselected**.

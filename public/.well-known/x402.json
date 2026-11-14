@@ -72,6 +72,14 @@
       "network": "eip155:8453",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "scheme": "exact"
+    },
+    "POST /v1/bundle": {
+      "price": "$0.15",
+      "amount": "150000",
+      "description": "Bundle: token-risk + address-risk + (optional) source scan in one call",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "scheme": "exact"
     }
   },
   "endpoints": {
@@ -84,7 +92,9 @@
     "POST /v1/scan/project": "Multi-file project security scan ($0.10)",
     "POST /v1/address-risk": "Address risk heuristics ($0.005)",
     "POST /v1/token-risk": "Token risk by address: honeypot verdict, transfer tax, owner privileges ($0.05)",
+    "POST /v1/bundle": "Bundle: token-risk + address-risk + (optional) source scan in one call ($0.15)",
     "GET /llms.txt": "LLM-facing service description",
+    "GET /v1/verify": "attestation verification (free)",
     "GET /.well-known/x402.json": "this file"
   },
   "extensions": {
@@ -892,6 +902,144 @@
               "input"
             ]
           }
+        },
+        "preflight_bundle": {
+          "info": {
+            "input": {
+              "type": "mcp",
+              "toolName": "preflight_bundle",
+              "description": "Combined token-risk + address-risk + optional source scan ($0.15).",
+              "transport": "streamable-http",
+              "inputSchema": {
+                "properties": {
+                  "address": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "address"
+                ]
+              },
+              "example": {
+                "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  },
+                  "inputSchema": {
+                    "type": "object"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "streamable-http",
+                      "sse"
+                    ]
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type",
+                  "toolName",
+                  "inputSchema"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
+        },
+        "preflight_verify": {
+          "info": {
+            "input": {
+              "type": "mcp",
+              "toolName": "preflight_verify",
+              "description": "Verify a past attestation by source digest (free).",
+              "transport": "streamable-http",
+              "inputSchema": {
+                "properties": {
+                  "digest": {
+                    "type": "string"
+                  },
+                  "attestation": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "digest"
+                ]
+              },
+              "example": {
+                "digest": "0xabababababababababababababababababababababababababababababababab"
+              }
+            }
+          },
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  },
+                  "inputSchema": {
+                    "type": "object"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "streamable-http",
+                      "sse"
+                    ]
+                  },
+                  "example": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "type",
+                  "toolName",
+                  "inputSchema"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input"
+            ]
+          }
         }
       },
       "POST /v1/token-risk": {
@@ -985,6 +1133,97 @@
             "input"
           ]
         }
+      },
+      "POST /v1/bundle": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "source": "pragma solidity ^0.8.20; contract Token { ... }"
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "verdict": "review",
+              "score": 50.0,
+              "findings": []
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST",
+                    "PUT",
+                    "PATCH"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "description": "Token or contract address"
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "Optional Solidity source"
+                    }
+                  },
+                  "required": [
+                    "address"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "method",
+                "bodyType",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
       }
     }
   },
@@ -993,6 +1232,8 @@
       "preflight_check": "scan Solidity source ($0.01)",
       "preflight_sim": "simulate a transaction (quick or deep)",
       "preflight_token_risk": "check a token before trading ($0.05)",
+      "preflight_bundle": "combined token/address/source analysis ($0.15)",
+      "preflight_verify": "verify a past attestation (free)",
       "preflight_pricing": "free price list"
     },
     "transport": "stdio | streamable-http"

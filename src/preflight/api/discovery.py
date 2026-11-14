@@ -99,6 +99,7 @@ def build_x402_discovery(cfg: Config | None = None) -> dict[str, Any]:
     endpoints.update(
         {
             "GET /llms.txt": "LLM-facing service description",
+            "GET /v1/verify": "attestation verification (free)",
             "GET /.well-known/x402.json": "this file",
         }
     )
@@ -142,6 +143,11 @@ def build_x402_discovery(cfg: Config | None = None) -> dict[str, Any]:
         tools["preflight_token_risk"] = (
             f"check a token before trading ({routes[_TOKEN_RISK_ROUTE][0]})"
         )
+    if "POST /v1/bundle" in routes:
+        tools["preflight_bundle"] = (
+            f"combined token/address/source analysis ({routes['POST /v1/bundle'][0]})"
+        )
+    tools["preflight_verify"] = "verify a past attestation (free)"
     tools["preflight_pricing"] = "free price list"
     doc["mcp"] = {"tools": tools, "transport": "stdio | streamable-http"}
     return doc

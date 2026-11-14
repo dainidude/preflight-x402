@@ -182,3 +182,42 @@ uv run pytest tests/ -m "not network" -q
 
 ## Cross-area requests
 - None.
+
+---
+
+# Wave 5 — E1 verify endpoint + E2 trending-token verdicts
+
+## E1 — Public attestation verification
+- Added `src/preflight/core/verify.py` with `verify_attestation(digest, attestation)`.
+  - Wraps the arbiter-owned `attestation.verify_report()` EIP-712 verifier.
+  - Returns `{valid, signer, verdict, source_sha256, checked_at}` on success,
+    or `{valid: false, reason: ...}` on failure.
+- Published the live attester address in `public/llms.txt`:
+  `Attestation signer: 0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa — verify at GET /v1/verify`.
+- `GET /v1/verify` was already present in `FREE_ROUTES` and wired in `src/preflight/api/app.py`.
+- Tests in `tests/test_core_verify.py`: valid round-trip, tampered digest, wrong signer,
+  missing fields.
+
+## E2 — Trending-token verdicts in the daily digest
+- Added `src/preflight/core/trending.py`:
+  - `get_trending_base_tokens(n=3)` fetches top Base tokens from GeckoTerminal's
+    free pools API, looks up symbols, and returns contract addresses.
+  - `scan_trending_tokens(n=3)` runs `run_token_risk` on each token via in-process
+    import (no HTTP round-trip), prepending `Token: SYMBOL (address)` to report notes.
+  - `format_trending_cards(reports)` produces Discord one-liners
+    (`✅/⚠️/🚨 SYMBOL: verdict — top finding`).
+- Wired into `deploy/modal_app.py::daily_digest`: after the metrics summary, scans
+  3 trending tokens and appends the verdict cards to the Discord message.
+- Tests in `tests/test_core_trending.py`: mocked trending source + mocked
+  `run_token_risk`, format assertions, and a network-marked real-source test.
+
+## Test results
+```bash
+uv run pytest tests/ -m "not network" -q
+```
+- **182 passed, 7 deselected (network), 1 warning**
+
+Note: `tests/test_http_surface.py` hangs in the full-suite run because its `/v1/bundle` tests perform live RPC / anvil work without `@pytest.mark.network`. Excluding that file yields the count above; the E1/E2 tests pass cleanly.
+
+## Cross-area requests
+- None.

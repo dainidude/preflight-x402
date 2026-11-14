@@ -18,6 +18,8 @@
 | POST | `/v1/scan/project` | $0.10 | x402 |
 | POST | `/v1/address-risk` | $0.005 | x402 |
 | POST | `/v1/token-risk` | $0.05 | x402 |
+| POST | `/v1/bundle` | $0.15 | x402 |
+| GET | `/v1/verify` | free | none |
 
 Free trial: send header `X-Preflight-Free: trial` to get your first 10
 scans/day free (opt-in; requests without the header are paywalled normally).
@@ -36,6 +38,15 @@ Give the token contract address and get back a honeypot verdict, transfer tax
 percentage, and owner-privilege findings as a severity-scored `ScanReport`
 ($0.05). It is address-first: no Solidity source or contract name needed.
 
+`/v1/bundle` ($0.15) runs token-risk, address-risk, and an optional source scan
+in one call. Send `{address}` alone, or add `"source"` for a full Solidity
+analysis alongside the address checks.
+
+`/v1/verify` is free: pass a report's `source_sha256` as `digest` (and the
+report's `attestation` JSON as `attestation`) to verify the EIP-712 signature.
+The attester signer for the live service is
+`0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa`.
+
 `/metrics` exposes revenue and usage counters (for example
 `revenue_base_units`) with no payment.
 
@@ -47,6 +58,7 @@ percentage, and owner-privilege findings as a severity-scored `ScanReport`
 - Pay to: `0x5515f59a30fe2b9152cd5648a3a0d8c30c837d41`
 - Facilitator: `https://api.cdp.coinbase.com/platform/v2/x402` (Coinbase CDP;
   `https://x402.org/facilitator` is the public fallback)
+- Attestation signer: `0x3779bb827AB1F32A317fD30157Ac03Dc5CCA88aa` — verify at `GET /v1/verify`
 
 A paid route responds `402 Payment Required` with a `PAYMENT-REQUIRED` header
 containing the x402 payment requirements. Retry the same request with a
@@ -106,6 +118,18 @@ transfer. `source` is optional Solidity source for static honeypot detectors.
 
 Returns the same `ScanReport` shape, with honeypot, transfer-tax, and owner
 privilege findings.
+
+`POST /v1/bundle`:
+
+```json
+{
+  "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "source": "pragma solidity ^0.8.20; contract Token { ... }"
+}
+```
+
+`source` is optional; omit it for address-only analysis. The response combines
+the token-risk, address-risk, and optional source-scan results.
 
 ## Response (ScanReport)
 
@@ -206,13 +230,18 @@ curl -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/sim/deep 
   -H 'Content-Type: application/json' \
   -H 'PAYMENT-SIGNATURE: <base64>' \
   -d '{"to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","data":"0xa9059cbb...","value_wei":"0"}'
+
+# Verify a past verdict (free; URL-encode the attestation JSON)
+curl 'https://preflight--preflight-api-api.us-east.modal.run/v1/verify?digest=0x...&attestation=%7B...%7D'
 ```
 
 ## MCP
 
 An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01),
-`preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep), and
-`preflight_token_risk {address}` ($0.05), plus free `preflight_pricing`. Set
+`preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep),
+`preflight_token_risk {address}` ($0.05), and
+`preflight_bundle {address, source?}` ($0.15), plus free
+`preflight_verify {digest, attestation?}` and `preflight_pricing`. Set
 `mode: "deep"` to use `/v1/sim/deep`. Run it with
 `uv run python -m preflight.mcp.server` (stdio) or `--http` for streamable HTTP.
 
