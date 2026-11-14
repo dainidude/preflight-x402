@@ -59,9 +59,10 @@ def _fallback_tokens(n: int) -> list[dict[str, str]]:
 def get_trending_base_tokens(n: int = 3) -> list[dict[str, str]]:
     """Return the top ``n`` Base token contract addresses by 24h volume.
 
-    Uses GeckoTerminal's free pools API as the public source, then looks up
-    each token's symbol. Falls back to configured assets if the network call
-    fails.
+    Uses GeckoTerminal's free pools API. Symbols come from the pool name
+    (e.g. "WETH / USDC" → base=WETH, quote=USDC) — no separate lookup needed,
+    so no rate-limit issues. Falls back to configured assets if the network
+    call fails.
     """
     try:
         resp = httpx.get(
@@ -78,8 +79,15 @@ def get_trending_base_tokens(n: int = 3) -> list[dict[str, str]]:
     seen: set[str] = set()
 
     for pool in pools:
+        # Pool name format: "TOKEN1 / TOKEN2 0.05%" — split and clean
+        pool_name = pool.get("attributes", {}).get("name", "")
+        name_parts = pool_name.split(" / ")
+        base_symbol = name_parts[0].strip() if name_parts else "UNKNOWN"
+        # Quote symbol may have a fee suffix (e.g. "USDC 0.05%") — strip it
+        quote_symbol = name_parts[1].split()[0].strip() if len(name_parts) > 1 else "UNKNOWN"
+
         relationships = pool.get("relationships", {})
-        for side in ("base_token", "quote_token"):
+        for side, symbol in (("base_token", base_symbol), ("quote_token", quote_symbol)):
             tok = (
                 relationships.get(side, {})
                 .get("data", {})
@@ -92,7 +100,6 @@ def get_trending_base_tokens(n: int = 3) -> list[dict[str, str]]:
             if low in seen:
                 continue
             seen.add(low)
-            symbol = _token_symbol(addr) or "UNKNOWN"
             tokens.append({"address": addr, "symbol": symbol})
             if len(tokens) >= n:
                 return tokens
@@ -100,9 +107,9 @@ def get_trending_base_tokens(n: int = 3) -> list[dict[str, str]]:
     return tokens
 
 
-def format_trending_cards(reports: list[ScanReport]) -> str:
-    """Format ScanReports as one-line Discord verdict cards."""
-    if not reports:
+def format_trending_cards(results: list[dict]) -> str:
+    """Format scan results as one-line Discord verdict cards."""
+    if not results:
         return ""
     lines = ["📈 Trending Base tokens:"]
     emoji = {
@@ -110,37 +117,33 @@ def format_trending_cards(reports: list[ScanReport]) -> str:
         "review": "⚠️",
         "block": "🚨",
     }
-    for report in reports:
-        symbol = "UNKNOWN"
-        for note in report.notes:
-            if note.startswith("Token:"):
-                # Token: SYMBOL (0x...)
-                m = re.search(r"Token:\s+(\S+)", note)
-                if m:
-                    symbol = m.group(1)
-                break
+    for r in results:
+        symbol = r["symbol"]
+        report = r["report"]
+        if report is None:
+            lines.append(f"❓ {symbol}: scan_failed — could not analyze")
+            continue
         top = report.findings[0].title if report.findings else "no findings"
         lines.append(f"{emoji.get(report.verdict, '❓')} {symbol}: {report.verdict} — {top}")
     return "\n".join(lines)
 
 
-async def scan_trending_tokens(n: int = 3) -> list[ScanReport]:
+async def scan_trending_tokens(n: int = 3) -> list[dict]:
     """Fetch trending tokens and run the token-risk scanner on each.
 
-    The token address (and symbol) are prepended to each report's notes so
-    downstream formatters can attribute the verdict.
+    Returns a list of dicts: {"symbol", "address", "report"} — the report is a
+    ScanReport, or None if the detailed scan failed (in which case the token
+    still appears in the feed with a "scan_failed" note).
     """
     tokens = get_trending_base_tokens(n)
-    reports: list[ScanReport] = []
+    results: list[dict] = []
     for tok in tokens:
         addr = tok["address"]
         symbol = tok.get("symbol") or "UNKNOWN"
+        report: ScanReport | None = None
         try:
             report = await run_token_risk(addr)
-        except Exception:
-            # A single token failing (e.g., RPC hiccup) should not break the
-            # whole digest.
-            continue
-        report.notes.insert(0, f"Token: {symbol} ({addr})")
-        reports.append(report)
-    return reports
+        except Exception as exc:
+            print(f"trending: token-risk scan failed for {symbol}: {exc}")
+        results.append({"symbol": symbol, "address": addr, "report": report})
+    return results

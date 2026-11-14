@@ -106,28 +106,22 @@ def mcp():
     return create_http_app()
 
 
-def _extract_verdicts(reports: list) -> list[dict]:
-    """Convert ScanReports to the serializable verdict dicts for /verdicts."""
-    import re as _re
+def _extract_verdicts(results: list[dict]) -> list[dict]:
+    """Convert scan results to the serializable verdict dicts for /verdicts."""
+    from datetime import datetime, timezone as _tz
 
+    now = datetime.now(_tz.utc).isoformat(timespec="seconds")
     out: list[dict] = []
-    for report in reports:
-        symbol, address = "UNKNOWN", ""
-        for note in report.notes:
-            if note.startswith("Token:"):
-                m = _re.search(r"Token:\s+(\S+)\s+\((0x[a-fA-F0-9]+)\)", note)
-                if m:
-                    symbol = m.group(1)
-                    address = m.group(2)
-                break
+    for r in results:
+        report = r.get("report")
         out.append({
-            "symbol": symbol,
-            "address": address,
-            "verdict": report.verdict,
-            "score": report.score,
-            "expires_at": report.expires_at,
-            "top_finding": report.findings[0].title if report.findings else None,
-            "scanned_at": report.scanned_at,
+            "symbol": r.get("symbol", "UNKNOWN"),
+            "address": r.get("address", ""),
+            "verdict": report.verdict if report else "scan_failed",
+            "score": report.score if report else None,
+            "expires_at": report.expires_at if report else None,
+            "top_finding": report.findings[0].title if report and report.findings else None,
+            "scanned_at": report.scanned_at if report else now,
         })
     return out
 
@@ -184,9 +178,9 @@ def daily_digest() -> None:
         text = f"Digest metrics fetch failed: {exc}"
 
     try:
-        trending_reports = asyncio.run(scan_trending_tokens(3))
-        _save_verdicts(_extract_verdicts(trending_reports))
-        cards = format_trending_cards(trending_reports)
+        trending_results = asyncio.run(scan_trending_tokens(3))
+        _save_verdicts(_extract_verdicts(trending_results))
+        cards = format_trending_cards(trending_results)
         if cards:
             text += "\n\n" + cards
     except Exception as exc:
