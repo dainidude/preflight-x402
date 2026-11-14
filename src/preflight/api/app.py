@@ -231,7 +231,7 @@ async def verify(digest: str = "", attestation: str = "") -> Response:
 
 
 @app.api_route("/verdicts", methods=["GET", "HEAD"])
-async def verdicts() -> Response:
+async def verdicts(raw: Request) -> Response:
     """Free: the latest trending-token verdicts (public social proof).
 
     Content-negotiated: JSON for agents (Accept: application/json),
@@ -240,7 +240,7 @@ async def verdicts() -> Response:
     import json as _json
     from pathlib import Path
 
-    accept = request.headers.get("accept", "")
+    accept = raw.headers.get("accept", "")
     verdicts: list[dict] = []
     try:
         vf = Path("/data/state/verdicts.json")
@@ -249,9 +249,6 @@ async def verdicts() -> Response:
     except Exception:
         verdicts = []
 
-    from starlette.requests import Request  # noqa: F811
-
-    r = Request(scope=request.scope, receive=request._receive)
     if "application/json" in accept:
         return JSONResponse({"verdicts": verdicts, "total": len(verdicts)})
 
