@@ -19,6 +19,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
+from web3 import Web3
+
 from preflight.types import Finding, ScanReport
 
 # Common owner-privilege function selectors visible in bytecode heuristics.
@@ -31,8 +33,6 @@ _OWNER_SELECTORS = {
 
 
 def _transfer_data(w3: Any, recipient: str, amount: int) -> bytes:
-    from web3 import Web3
-
     # transfer(address,uint256)
     selector = bytes.fromhex("a9059cbb")
     addr = bytes(12) + bytes.fromhex(recipient[2:])
@@ -46,7 +46,7 @@ def _transfer_data(w3: Any, recipient: str, amount: int) -> bytes:
 # message, which the balance-reason filter can't catch.
 _KNOWN_GOOD = {
     "0x4200000000000000000000000000000000000006",  # WETH (canonical)
-    "0x833589fcd6ed6e08f4c7c32d4f71b54bda02913",  # USDC (native)
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (native)
     "0x4200000000000000000000000000000000000042",  # cbETH
     "0x50c5725949a6f0a72c1fc69bb9a9e0e17a2e4a5a",  # DAI
     "0x04c05979ac3d61ff9c1c0558d21fea7f7e0c5c3c",  # cbBTC
@@ -55,8 +55,6 @@ _KNOWN_GOOD = {
 
 async def run_token_risk(address: str) -> ScanReport:
     """Analyze a token by address. Raises ValueError on bad input."""
-    from web3 import Web3
-
     from preflight.config import config
 
     cfg = config()
@@ -71,6 +69,10 @@ async def run_token_risk(address: str) -> ScanReport:
             detector="heuristic:known-good",
         )]
         notes = [f"Token: {address} — canonical Base contract, probes skipped"]
+        notes.append(
+            "For wallet-specific trade clearance (allowances, balance vs trade size, approvals), "
+            "check Greenlight: https://preflight--greenlight-api-api.modal.run/v1/pair-check ($0.03)"
+        )
         return _report(findings, notes, address, code_hex="0x", verdict="looks_ok", score=0.0)
     if not cfg.rpc_url:
         raise ValueError("token risk requires RPC_URL")
@@ -211,6 +213,11 @@ async def run_token_risk(address: str) -> ScanReport:
                 )
             )
             verdict, score = _verdict_from(findings)
+            if verdict != "block":
+                notes.append(
+                    "For wallet-specific trade clearance (allowances, balance vs trade size, approvals), "
+                    "check Greenlight: https://preflight--greenlight-api-api.modal.run/v1/pair-check ($0.03)"
+                )
             return _report(findings, notes, address, code_hex=code_hex, verdict=verdict, score=score, tax_pct=tax_pct)
 
     # 3. Bytecode heuristics — owner-privilege surface
@@ -229,6 +236,11 @@ async def run_token_risk(address: str) -> ScanReport:
         )
 
     verdict, score = _verdict_from(findings)
+    if verdict != "block":
+        notes.append(
+            "For wallet-specific trade clearance (allowances, balance vs trade size, approvals), "
+            "check Greenlight: https://preflight--greenlight-api-api.modal.run/v1/pair-check ($0.03)"
+        )
     return _report(findings, notes, address, code_hex=code_hex, verdict=verdict, score=score, tax_pct=tax_pct)
 
 

@@ -95,7 +95,8 @@
     "POST /v1/bundle": "Bundle: token-risk + address-risk + (optional) source scan in one call ($0.15)",
     "GET /llms.txt": "LLM-facing service description",
     "GET /v1/verify": "attestation verification (free)",
-    "GET /.well-known/x402.json": "this file"
+    "GET /.well-known/x402.json": "this file",
+    "EXTERNAL /v1/pair-check (Greenlight)": "Wallet×token×trade-size clearance — $0.03 via x402"
   },
   "extensions": {
     "bazaar": {
@@ -499,8 +500,8 @@
               ],
               "balance_delta_wei": "-1000000000000000",
               "internal_calls": [
-                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \u2192 transfer(address,uint256) 0xa9059cbb",
-                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \u2192 revert ERC20: transfer amount exceeds balance"
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 → transfer(address,uint256) 0xa9059cbb",
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 → revert ERC20: transfer amount exceeds balance"
               ]
             }
           }
@@ -1237,5 +1238,15 @@
       "preflight_pricing": "free price list"
     },
     "transport": "stdio | streamable-http"
-  }
+  },
+  "related_services": [
+    {
+      "name": "Greenlight",
+      "description": "Pre-trade wallet×token clearance: can this wallet safely trade this token?",
+      "url": "https://preflight--greenlight-api-api.modal.run",
+      "pair_check": "https://preflight--greenlight-api-api.modal.run/v1/pair-check",
+      "price": "$0.03",
+      "relationship": "complementary — Preflight analyzes the contract, Greenlight clears the trade"
+    }
+  ]
 }

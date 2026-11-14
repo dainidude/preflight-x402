@@ -221,3 +221,32 @@ Note: `tests/test_http_surface.py` hangs in the full-suite run because its `/v1/
 
 ## Cross-area requests
 - None.
+
+---
+
+# Wave 6 — Greenlight cross-references in core outputs
+
+## What changed
+- `src/preflight/core/token_risk.py`
+ - `run_token_risk()` now appends a Greenlight note when the verdict is **not** `block`.
+ - The note is added both on the canonical-token fast path and after the fork probes / bytecode heuristics complete.
+- `src/preflight/core/simulation.py`
+ - `_run_deep_simulation()` appends a Greenlight wallet-clearance note to every deep-sim report (including the anvil-unavailable fallback).
+
+## Tests
+- `tests/test_core_token_risk.py` (new)
+ - asserts the Greenlight note appears for `looks_ok` (canonical) and `review` verdicts.
+ - asserts the note is absent for `block` verdicts.
+- `tests/test_simulation.py`
+ - `test_deep_sim_report_includes_greenlight_note` asserts the note is present in deep-sim reports.
+
+## Test results
+```bash
+uv run pytest tests/ -m "not network" -q --ignore=tests/test_http_surface.py
+```
+- **187 passed, 7 deselected (network), 1 warning**
+
+Note: `tests/test_http_surface.py` still hangs in the full-suite run because its `/v1/bundle` tests perform live RPC/anvil work without `@pytest.mark.network`.
+
+## Cross-area requests
+- None.

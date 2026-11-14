@@ -21,6 +21,12 @@
 | POST | `/v1/bundle` | $0.15 | x402 |
 | GET | `/v1/verify` | free | none |
 
+## Related service: Greenlight
+
+Greenlight (https://preflight--greenlight-api-api.modal.run) is the complementary
+pre-trade wallet intelligence: wallet-intel ($0.01), pair-check ($0.03),
+batch ($0.05). Preflight analyzes the contract; Greenlight clears the trade.
+
 Free trial: send header `X-Preflight-Free: trial` to get your first 10
 scans/day free (opt-in; requests without the header are paywalled normally).
 

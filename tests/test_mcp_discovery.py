@@ -91,3 +91,22 @@ def test_router_serves_generated_json(monkeypatch: pytest.MonkeyPatch) -> None:
     assert data["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
     assert data["pricing"]["POST /v1/bundle"]["amount"] == "150000"
     assert data["pricing"]["POST /v1/scan"]["amount"] == "10000"
+
+
+def test_greenlight_related_service_present() -> None:
+    """Greenlight sister service appears in the generated discovery doc."""
+    doc = discovery.build_x402_discovery(_cfg())
+
+    assert "related_services" in doc
+    related = doc["related_services"]
+    assert len(related) == 1
+    gl = related[0]
+    assert gl["name"] == "Greenlight"
+    assert gl["url"] == "https://preflight--greenlight-api-api.modal.run"
+    assert gl["pair_check"] == "https://preflight--greenlight-api-api.modal.run/v1/pair-check"
+    assert gl["price"] == "$0.03"
+    assert "complementary" in gl["relationship"]
+
+    assert "EXTERNAL /v1/pair-check (Greenlight)" in doc["endpoints"]
+    assert "$0.03" in doc["endpoints"]["EXTERNAL /v1/pair-check (Greenlight)"]
+

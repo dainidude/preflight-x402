@@ -237,6 +237,22 @@ class TestDeepSimulation:
         assert any(f.id == "sim:deep-unavailable" for f in report.findings)
         assert "fell back to quick mode" in " ".join(report.notes)
 
+    @pytest.mark.asyncio
+    async def test_deep_sim_report_includes_greenlight_note(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(simulation_mod, "_anvil_path", lambda: None)
+        req = SimRequest(
+            to="0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            data="0x1234",
+            mode="deep",
+        )
+        report = await run_simulation(req)
+        assert any(
+            "Greenlight" in n and "pair-check" in n and "wallet clearance" in n
+            for n in report.notes
+        )
+
 
 def _mock_w3_for_probe(
     token: str,

@@ -58,6 +58,17 @@ public/    llms.txt + .well-known/x402.json (discovery)
 ## Listing
 
 - **x402scan**: https://www.x402scan.com/server/1961af3d-afed-400b-bc57-ca4ebe41ef18 (all 5 paid routes indexed)
+- **CDP Bazaar**: all 6 paid routes indexed (per-route settled payments)
+- **MCP Registry**: `io.github.dainidude/preflight` — remote `https://preflight--preflight-api-mcp.modal.run/mcp`
+- **Glama**: connector claimed + servers listing
+
+## Works with Greenlight
+
+[Greenlight](https://preflight--greenlight-api-api.modal.run) is the sister service:
+Preflight analyzes the **contract** (honeypot probes, transfer tax, source scans);
+Greenlight clears the **trade** (wallet balances, open approvals, pair-check —
+can this wallet safely trade this token at this size?). Together they form a
+complete pre-trade check for trading agents on Base.
 
 ## Docs
 

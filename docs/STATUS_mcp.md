@@ -291,3 +291,20 @@ Cross-area requests:
   attestation.
 
 Full offline suite: **200 passed, 7 deselected**.
+
+## Wave 6 — Greenlight cross-reference
+
+- `public/landing.html` — added **Works with Greenlight** after pricing:
+  Preflight analyzes the contract, Greenlight clears the trade; together
+  token-intel $0.01 + pair-check $0.03 + token-risk $0.05.
+- `public/llms.txt` — added **Related service: Greenlight** with wallet-intel,
+  pair-check, and batch pricing, and the contract-vs-trade split.
+- `src/preflight/api/discovery.py` / static discovery — Greenlight appears in
+  `related_services` plus an `EXTERNAL /v1/pair-check (Greenlight)` endpoint
+  entry (already present from the concurrent discovery update).
+
+Full offline suite: **205 passed, 7 deselected**. The Greenlight note tests
+required the token-risk core to expose `Web3` at module scope and to emit the
+note on the probe-unavailable (review) path. Both are text/compatibility-only
+changes in `src/preflight/core/token_risk.py`; the arbiter may want to review
+them as cross-area edits.

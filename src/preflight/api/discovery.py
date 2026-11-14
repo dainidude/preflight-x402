@@ -101,6 +101,7 @@ def build_x402_discovery(cfg: Config | None = None) -> dict[str, Any]:
             "GET /llms.txt": "LLM-facing service description",
             "GET /v1/verify": "attestation verification (free)",
             "GET /.well-known/x402.json": "this file",
+            "EXTERNAL /v1/pair-check (Greenlight)": "Wallet×token×trade-size clearance — $0.03 via x402",
         }
     )
 
@@ -132,6 +133,16 @@ def build_x402_discovery(cfg: Config | None = None) -> dict[str, Any]:
         "pricing": pricing,
         "endpoints": endpoints,
     }
+    doc["related_services"] = [
+        {
+            "name": "Greenlight",
+            "description": "Pre-trade wallet×token clearance: can this wallet safely trade this token?",
+            "url": "https://preflight--greenlight-api-api.modal.run",
+            "pair_check": "https://preflight--greenlight-api-api.modal.run/v1/pair-check",
+            "price": "$0.03",
+            "relationship": "complementary — Preflight analyzes the contract, Greenlight clears the trade",
+        }
+    ]
     doc["extensions"] = _template_sections().get("extensions", {"bazaar": {}})
 
     tools: dict[str, str] = {}

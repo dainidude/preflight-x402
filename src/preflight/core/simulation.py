@@ -556,16 +556,21 @@ async def _run_deep_simulation(
     rpc_url = config().rpc_url or DEFAULT_MAINNET_RPC
 
     anvil_path = _anvil_path()
+    note = (
+        "For pre-trade wallet clearance (can this wallet safely execute this "
+        "trade?), check Greenlight: "
+        "https://preflight--greenlight-api-api.modal.run/v1/pair-check ($0.03)"
+    )
     if not anvil_path:
-        note = "anvil unavailable, fell back to quick mode"
+        note_fb = "anvil unavailable, fell back to quick mode"
         quick = await _run_quick_simulation(
             req, to_address, from_address, value, data, [], []
         )
         return quick.model_copy(
             update={
                 "simulator": "anvil-fork:v1",
-                "notes": quick.notes + [note],
-                "findings": quick.findings + [_deep_unavailable_finding(note)],
+                "notes": quick.notes + [note_fb, note],
+                "findings": quick.findings + [_deep_unavailable_finding(note_fb)],
             }
         )
 
@@ -690,6 +695,8 @@ async def _run_deep_simulation(
                     solc_version=None,
                 )
                 findings.extend(run_all_custom_detectors(ctx))
+
+            notes.append(note)
 
             return _build_sim_report(
                 to=to_address,

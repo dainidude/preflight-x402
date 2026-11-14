@@ -55,6 +55,13 @@
     <tr><td><code>GET /v1/verify</code></td><td>Verify a past attestation by source digest</td><td>free</td></tr>
   </table>
 
+  <h2>Works with Greenlight</h2>
+  <p>Preflight analyzes the <strong>contract</strong>. <a href="https://preflight--greenlight-api-api.modal.run">Greenlight</a>
+  clears the <strong>trade</strong> — wallet balances, open approvals, and pair-check
+  (can this wallet safely trade this token at this size?) for $0.03.</p>
+  <p>Together: <code>token-intel $0.01 + pair-check $0.03 + token-risk $0.05</code> — a complete
+  pre-trade check for $0.09, cheaper than a single bad trade.</p>
+
   <h2>Try it</h2>
   <pre>curl -i -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/scan \
   -H 'Content-Type: application/json' \
