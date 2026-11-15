@@ -35,7 +35,13 @@ SESSION_FILE = Path.home() / ".preflight-x-session.json"
 PROFILE_DIR = Path.home() / ".preflight-x-profile"
 VERDICTS_URL = "https://preflight--preflight-api-api.us-east.modal.run/verdicts"
 
-_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    # MUST match the plain login launch: headless defaults to the "basic"
+    # cookie store while a desktop login defaults to the keyring store —
+    # cookies saved under one store cannot be decrypted under the other.
+    "--password-store=basic",
+]
 # Headless chromium reports a "HeadlessChrome" UA token that X flags;
 # posting with a real-Chrome UA and an established session is fine.
 _POST_UA = (
@@ -114,6 +120,7 @@ def login() -> None:
         [
             binary,
             f"--user-data-dir={PROFILE_DIR}",
+            "--password-store=basic",  # must match the Playwright launch below
             "--no-first-run",
             "--no-default-browser-check",
             "https://x.com/login",
@@ -147,51 +154,81 @@ def login() -> None:
 
 
 def post(text: str) -> bool:
-    """Post a tweet using the saved profile/session (headless)."""
+    """Post a tweet using the saved profile/session. Headless first, headed
+    fallback — if X walls the headless compose, a visible window will open."""
     from playwright.sync_api import sync_playwright
 
     if not PROFILE_DIR.exists() and not SESSION_FILE.exists():
         print("No session — run 'login' first")
         return False
 
-    with sync_playwright() as p:
-        # Prefer the persistent profile (real login state + device trust);
-        # fall back to the JSON storage state if only that exists.
-        if PROFILE_DIR.exists():
-            context = _launch_context(p, headless=True)
-        else:
-            state = json.loads(SESSION_FILE.read_text())
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=state)
+    last_error: Exception | None = None
+    for headless in (True, False):
+        with sync_playwright() as p:
+            # Prefer the persistent profile (real login state + device trust);
+            # fall back to the JSON storage state if only that exists.
+            if PROFILE_DIR.exists():
+                context = _launch_context(p, headless=headless)
+            else:
+                state = json.loads(SESSION_FILE.read_text())
+                browser = p.chromium.launch(headless=headless)
+                context = browser.new_context(storage_state=state)
 
-        page = context.pages[0] if context.pages else context.new_page()
+            page = context.pages[0] if context.pages else context.new_page()
 
-        try:
-            page.goto("https://x.com/compose/post", wait_until="networkidle", timeout=30000)
-
-            # Wait for the compose box
-            page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
-            page.fill('[data-testid="tweetTextarea_0"]', text)
-            page.click('[data-testid="tweetButton"]')
-
-            # Wait for confirmation: the success toast (or the compose box
-            # closing) — not a blind sleep.
-            page.wait_for_selector('[data-testid="toast"]', timeout=10000)
-
-            # Save refreshed session
-            SESSION_FILE.write_text(json.dumps(context.storage_state()))
-            print(f"Posted: {text[:60]}…")
-            return True
-        except Exception as exc:
-            print(f"Post failed: {exc}")
-            # Save state anyway (might still be logged in)
             try:
+                # x.com/compose/post was retired — it no longer opens the
+                # modal. The reliable flow: load the home timeline (its
+                # inline compose button doubles as the login check), then
+                # press "n" — X's own shortcut — to open the compose modal.
+                page.goto(
+                    "https://x.com/home",
+                    wait_until="domcontentloaded",
+                    timeout=45000,
+                )
+                try:
+                    page.wait_for_selector(
+                        '[data-testid="tweetButtonInline"]', timeout=20000
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "not logged in (home timeline did not load) — "
+                        "run 'login' again"
+                    ) from exc
+                page.keyboard.press("n")  # X's compose shortcut
+                page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
+                page.click('[data-testid="tweetTextarea_0"]')
+                page.keyboard.type(text)
+                page.click('[data-testid="tweetButton"]')
+
+                # Confirmation: success toast, or the compose modal closing.
+                posted = False
+                try:
+                    page.wait_for_selector('[data-testid="toast"]', timeout=5000)
+                    posted = True
+                except Exception:
+                    page.wait_for_timeout(2000)
+                    if page.query_selector('[data-testid="tweetTextarea_0"]') is None:
+                        posted = True
+                if not posted:
+                    raise RuntimeError("no post confirmation (toast or closed modal)")
+
                 SESSION_FILE.write_text(json.dumps(context.storage_state()))
-            except Exception:
-                pass
-            return False
-        finally:
-            context.close()
+                print(f"Posted: {text[:60]}…")
+                return True
+            except Exception as exc:
+                last_error = exc
+                try:
+                    SESSION_FILE.write_text(json.dumps(context.storage_state()))
+                except Exception:
+                    pass
+            finally:
+                context.close()
+        if headless:
+            print("Headless compose failed — retrying in a visible window…")
+
+    print(f"Post failed: {last_error}")
+    return False
 
 
 def post_verdicts() -> None:
