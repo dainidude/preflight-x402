@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
-"""Post to X (Twitter) via browser automation — no API needed.
+"""Post to X (Twitter) via a real browser profile — no API needed.
 
-First run: opens a browser window for you to log into X manually.
-Subsequent runs: use the saved profile (headless) to post.
+First run: 'login' opens a COMPLETELY NORMAL browser (a plain process,
+zero automation — X's anti-bot wall cannot detect it) for you to log in
+by hand. The session lands in a persistent profile.
+Subsequent runs: 'post' drives that profile headlessly.
 
-X's login dead-ends (Continue button does nothing after the username step)
-inside Playwright's bundled Chromium — the automation fingerprint trips the
-anti-bot wall. This script therefore launches the SYSTEM chromium
-(channel="chromium") with the AutomationControlled flag masked and a
-PERSISTENT profile, so the login behaves like a normal user and the
-device-trust/2FA state survives between runs.
+Why not automate the login? X's login dead-ends (the username step's
+Continue button does nothing, no password field appears) in ANY
+CDP-driven browser — Playwright's bundled Chromium, AND the system
+chromium even with the AutomationControlled flag masked. X fingerprints
+the automation runtime itself, not just the flags. Only a plain,
+non-CDP browser process gets through reliably, so the login step uses
+one; automation is limited to authenticated posting afterwards.
 
 Usage:
-    uv run python scripts/x_post_browser.py login    # one-time: opens browser, log in, saves profile
-    uv run python scripts/x_post_browser.py post "text"  # headless post
-    uv run python scripts/x_post_browser.py verdicts     # post today's verdicts from /verdicts
+    uv run python scripts/x_post_browser.py login        # one-time: normal browser, log in by hand
+    uv run python scripts/x_post_browser.py post "text"   # headless post
+    uv run python scripts/x_post_browser.py verdicts      # post today's verdicts from /verdicts
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
+import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -29,6 +36,45 @@ PROFILE_DIR = Path.home() / ".preflight-x-profile"
 VERDICTS_URL = "https://preflight--preflight-api-api.us-east.modal.run/verdicts"
 
 _LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
+# Headless chromium reports a "HeadlessChrome" UA token that X flags;
+# posting with a real-Chrome UA and an established session is fine.
+_POST_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+)
+
+
+def _chromium_binary() -> str | None:
+    """Locate a real browser binary for the plain (non-automated) login."""
+    for name in ("chromium", "google-chrome-stable", "google-chrome", "brave-browser"):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _profile_has_auth_token(cookies_db: Path) -> bool:
+    """True if the profile's cookie DB holds X's auth_token (login done).
+
+    Cookie NAMES are plaintext in Chromium's SQLite (values are encrypted),
+    so a read-only name check verifies the login without any browser launch.
+    The DB is locked while the browser runs — retry briefly after it closes.
+    """
+    if not cookies_db.exists():
+        return False
+    for _ in range(10):
+        try:
+            con = sqlite3.connect(f"file:{cookies_db}?mode=ro", uri=True, timeout=5)
+            try:
+                row = con.execute(
+                    "SELECT 1 FROM cookies WHERE name = 'auth_token' LIMIT 1"
+                ).fetchone()
+                return row is not None
+            finally:
+                con.close()
+        except sqlite3.Error:
+            time.sleep(1)
+    return False
 
 
 def _launch_context(p: object, headless: bool):  # noqa: ANN202 - playwright type
@@ -40,53 +86,64 @@ def _launch_context(p: object, headless: bool):  # noqa: ANN202 - playwright typ
     """
     from playwright.sync_api import Error as PlaywrightError
 
+    kwargs: dict = {
+        "headless": headless,
+        "args": _LAUNCH_ARGS,
+        "locale": "en-US",
+    }
+    if headless:
+        kwargs["user_agent"] = _POST_UA
     try:
         return p.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            channel="chromium",
-            headless=headless,
-            args=_LAUNCH_ARGS,
-            locale="en-US",
+            str(PROFILE_DIR), channel="chromium", **kwargs
         )
     except PlaywrightError:
-        return p.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            headless=headless,
-            args=_LAUNCH_ARGS,
-            locale="en-US",
-        )
-
-
-def _has_auth_token(state: dict) -> bool:
-    """True if the storage state carries X's auth cookie (login completed)."""
-    return any(c.get("name") == "auth_token" for c in state.get("cookies", []))
+        return p.chromium.launch_persistent_context(str(PROFILE_DIR), **kwargs)
 
 
 def login() -> None:
-    """Open a visible browser, let the user log in, save the profile."""
-    from playwright.sync_api import sync_playwright
+    """Open a NORMAL browser (plain subprocess, zero automation), let the
+    user log in by hand, then verify the session landed in the profile."""
+    binary = _chromium_binary()
+    if binary is None:
+        print("No chromium/chrome binary found — install one first (e.g. pacman -S chromium).")
+        sys.exit(1)
 
-    with sync_playwright() as p:
-        context = _launch_context(p, headless=False)
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto("https://x.com/login")
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        [
+            binary,
+            f"--user-data-dir={PROFILE_DIR}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://x.com/login",
+        ]
+    )
+    print("A completely normal browser window opened — no automation attached.")
+    print("Log into X by hand: email, username, password, 2FA, captcha —")
+    print("whatever it asks. This time the username step will proceed.")
+    print()
+    print("When your timeline is visible, CLOSE the browser window, then")
+    print("press Enter here.")
+    input()
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
-        print("Log into X in the browser window — email, username, password,")
-        print("2FA, captcha: complete WHATEVER it asks (the username step is")
-        print("normal). Press Enter here only once your timeline is visible.")
-        input()
-
-        state = context.storage_state()
-        if not _has_auth_token(state):
-            print(
-                "WARNING: no auth_token cookie — the login did not complete.\n"
-                "Session NOT saved. Close the window and run 'login' again."
-            )
-        else:
-            SESSION_FILE.write_text(json.dumps(state))
-            print(f"Session saved to {SESSION_FILE}")
-            print(f"Persistent profile (2FA/device trust): {PROFILE_DIR}")
-        context.close()
+    if _profile_has_auth_token(PROFILE_DIR / "Default" / "Cookies"):
+        print("Login verified (auth_token present in the profile).")
+        print(f"Persistent profile: {PROFILE_DIR}")
+        print("Next: uv run python scripts/x_post_browser.py verdicts")
+    else:
+        print(
+            "WARNING: no auth_token cookie in the profile — the login did not\n"
+            "complete. Make sure every window of that profile is closed, then\n"
+            "run 'login' again."
+        )
+        sys.exit(1)
 
 
 def post(text: str) -> bool:
