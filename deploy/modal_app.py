@@ -19,6 +19,28 @@ import modal
 
 REPO = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE pairs from .env into os.environ (existing vars win).
+
+    Same semantics as `set -a && source .env && set +a`, which the mainnet
+    guard otherwise demands by hand — a bare `uv run modal deploy` used to
+    refuse with valid CDP keys sitting unused in .env.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.removeprefix("export ").strip()
+        if key.isidentifier() and key not in os.environ:
+            os.environ[key] = value.strip().strip("'\"")
+
+
+_load_dotenv(REPO / ".env")
+
 # Values injected into the deployed container at deploy time.
 DEPLOY_ENV = {
     "PREFLIGHT_PAY_TO_ADDRESS": os.getenv("PREFLIGHT_PAY_TO_ADDRESS", ""),
