@@ -197,7 +197,10 @@ def post(text: str) -> bool:
 def post_verdicts() -> None:
     """Fetch today's verdicts from /verdicts and post the interesting ones."""
     try:
-        data = json.load(urllib.request.urlopen(VERDICTS_URL, timeout=30))
+        # /verdicts is content-negotiated: without Accept: application/json
+        # it serves the HTML social-proof page and json.load fails on '<'.
+        req = urllib.request.Request(VERDICTS_URL, headers={"Accept": "application/json"})
+        data = json.load(urllib.request.urlopen(req, timeout=30))
         verdicts = data.get("verdicts", [])
     except Exception as exc:
         print(f"Could not fetch verdicts: {exc}")
