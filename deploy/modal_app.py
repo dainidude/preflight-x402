@@ -62,6 +62,8 @@ DEPLOY_ENV = {
     "X_ACCESS_TOKEN_SECRET": os.getenv("X_ACCESS_TOKEN_SECRET", ""),
     # Durable state on a Modal Volume: metrics/quotas survive redeploys
     "STATE_DIR": "/data/state",
+    # Wallets used for self-paid test settlements — digest labels their revenue
+    "TEST_WALLETS": os.getenv("TEST_WALLETS", ""),
     "PREFLIGHT_API_URL": "https://preflight--preflight-api-api.us-east.modal.run",
 }
 
@@ -203,6 +205,12 @@ def daily_digest() -> None:
         text = format_digest(metrics.get("metrics", {}))
     except Exception as exc:
         text = f"Digest metrics fetch failed: {exc}"
+
+    # Payers are hashed in metrics, so self-paid test revenue can't be split
+    # out exactly — flag it instead of letting "revenue" read as buyers.
+    # (scar: 2026-11-15 — $0.49 read as income; it was all own settlements.)
+    if os.environ.get("TEST_WALLETS", "").strip():
+        text += "\n\nNote: revenue includes self-paid test settlements (TEST_WALLETS)."
 
     try:
         trending_results = asyncio.run(scan_trending_tokens(3))
