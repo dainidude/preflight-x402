@@ -53,3 +53,12 @@ PREFLIGHT_API_KEYS=                         # optional enterprise key layer (off
 RPC_URL=https://mainnet.base.org
 DISCORD_WEBHOOK_URL=                        # sale pings + digest + heartbeat alerts
 ```
+
+## Private backup mirrors
+
+`private` (preflight-x402-private) is a pure backup — **Actions are disabled at the
+repo level** (API: `PUT /repos/…/actions/permissions {"enabled": false}`) and must
+stay that way. The monitor workflows read `secrets.DISCORD_WEBHOOK_URL`, which does
+not transfer with git pushes: on a fresh mirror every scheduled run fails by design
+("loud failure > silent monitoring") and emails the owner. Monitors run on `origin`
+only. Pushing this repo to any NEW remote requires the same Actions disable first.
