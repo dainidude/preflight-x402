@@ -42,16 +42,21 @@
   HTTP 402 — no accounts, no sign-ups (optional API keys available for enterprise use). First 10 scans/day are free with the
   <code>X-Preflight-Free: trial</code> header.</p>
 
+  <p><strong>Free token-risk demo:</strong>
+  <code>GET /v1/token-risk/demo?address=0x...</code> — <strong>FREE</strong> (5/day):
+  the FULL token-risk report. See exactly what a $0.02 paid call buys before paying.</p>
+
   <h2>Prices</h2>
   <table>
     <tr><th>Route</th><th>Product</th><th>Price</th></tr>
+    <tr><td><code>GET /v1/token-risk/demo</code></td><td>Free full-shape token-risk demo (5/day)</td><td>FREE</td></tr>
     <tr><td><code>POST /v1/scan</code></td><td>Solidity scan — solc + Slither + 5 custom DeFi detectors</td><td>$0.01</td></tr>
     <tr><td><code>POST /v1/sim</code></td><td>Transaction simulation — RPC eth_call + revert decoding</td><td>$0.05</td></tr>
     <tr><td><code>POST /v1/sim/deep</code></td><td>Deep simulation — anvil fork: gas, balance deltas, internal traces</td><td>$0.25</td></tr>
     <tr><td><code>POST /v1/scan/project</code></td><td>Multi-file project scan</td><td>$0.10</td></tr>
     <tr><td><code>POST /v1/address-risk</code></td><td>Address risk heuristics</td><td>$0.005</td></tr>
-    <tr><td><code>POST /v1/token-risk</code></td><td>Token risk by address — honeypot, transfer tax, owner privileges</td><td>$0.05</td></tr>
-    <tr><td><code>POST /v1/bundle</code></td><td>Combined token-risk + address-risk + optional source scan</td><td>$0.15</td></tr>
+    <tr><td><code>POST /v1/token-risk</code></td><td>Token risk by address — honeypot, transfer tax, owner privileges</td><td>$0.02</td></tr>
+    <tr><td><code>POST /v1/bundle</code></td><td>Combined token-risk + address-risk + optional source scan</td><td>$0.03</td></tr>
     <tr><td><code>GET /v1/verify</code></td><td>Verify a past attestation by source digest</td><td>free</td></tr>
   </table>
 
@@ -59,8 +64,8 @@
   <p>Preflight analyzes the <strong>contract</strong>. <a href="https://preflight--greenlight-api-api.modal.run">Greenlight</a>
   clears the <strong>trade</strong> — wallet balances, open approvals, and pair-check
   (can this wallet safely trade this token at this size?) for $0.03.</p>
-  <p>Together: <code>token-intel $0.01 + pair-check $0.03 + token-risk $0.05</code> — a complete
-  pre-trade check for $0.09, cheaper than a single bad trade.</p>
+  <p>Together: <code>pair-check $0.03 + token-risk $0.02</code> — a complete
+  pre-trade check for $0.05, cheaper than a single bad trade.</p>
 
   <h2>Try it</h2>
   <pre>curl -i -X POST https://preflight--preflight-api-api.us-east.modal.run/v1/scan \

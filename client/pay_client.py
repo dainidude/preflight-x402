@@ -12,9 +12,9 @@ Routes (``--route``):
   internal calls (same body as ``sim``; ``--deep`` upgrades ``--route sim``)
 * ``project`` — ``POST /v1/scan/project`` ($0.10), body ``{files, contract_name?}``
 * ``address-risk`` — ``POST /v1/address-risk`` ($0.005), body ``{address}``
-* ``token-risk`` — ``POST /v1/token-risk`` ($0.05), body ``{address}``; honeypot,
+* ``token-risk`` — ``POST /v1/token-risk`` ($0.02), body ``{address}``; honeypot,
   transfer tax, and owner-privilege check for trading agents
-* ``bundle`` — ``POST /v1/bundle`` ($0.15), body ``{address, source?}``; combined
+* ``bundle`` — ``POST /v1/bundle`` ($0.03), body ``{address, source?}``; combined
   token/address/source analysis
 
 With ``--route sim`` (or ``sim-deep``) and no ``--to`` it runs a zero-argument
@@ -151,8 +151,8 @@ ROUTES: dict[str, Route] = {
     "sim-deep": Route("sim-deep", "/v1/sim/deep", "$0.25", "250000"),
     "project": Route("project", "/v1/scan/project", "$0.10", "100000"),
     "address-risk": Route("address-risk", "/v1/address-risk", "$0.005", "5000"),
-    "token-risk": Route("token-risk", "/v1/token-risk", "$0.05", "50000"),
-    "bundle": Route("bundle", "/v1/bundle", "$0.15", "150000"),
+    "token-risk": Route("token-risk", "/v1/token-risk", "$0.02", "20000"),
+    "bundle": Route("bundle", "/v1/bundle", "$0.03", "30000"),
 }
 DEFAULT_ROUTE = "scan"
 

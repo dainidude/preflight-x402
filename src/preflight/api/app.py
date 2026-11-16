@@ -739,9 +739,10 @@ def _openapi_with_x402() -> dict[str, Any]:
         "via the x402 protocol (USDC, Base) and retry with the PAYMENT-SIGNATURE "
         "header to receive a severity-scored, EIP-712-attested verdict: "
         "looks_ok | review | block. Trading agents: POST a token address to "
-        "/v1/token-risk ($0.05) for a honeypot verdict, transfer tax %, and owner-privilege "
-        "checks. First 10 calls/day are free with the X-Preflight-Free: trial header. "
-        "Full service description at /llms.txt."
+        "/v1/token-risk ($0.02) for a honeypot verdict, transfer tax %, and owner-privilege "
+        "checks — or preview the full report free at "
+        "/v1/token-risk/demo?address=0x... (5/day). First 10 calls/day are free with the "
+        "X-Preflight-Free: trial header. Full service description at /llms.txt."
     )
 
     for path, methods in schema.get("paths", {}).items():

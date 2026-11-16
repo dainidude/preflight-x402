@@ -5,6 +5,13 @@
 > signed security verdict. Paid per call via x402 (HTTP 402 + real USDC on
 > Base mainnet).
 
+## Free token-risk demo
+
+`GET /v1/token-risk/demo?address=0x...` — **FREE** (5/day per identity): the
+FULL token-risk report. See exactly what a $0.02 paid call buys before paying.
+Returns the same honeypot, transfer-tax, and owner-privilege findings as
+`POST /v1/token-risk`, with `demo: true` in the body.
+
 ## Endpoints
 
 | Method | Path | Price | Auth |
@@ -12,13 +19,14 @@
 | GET | `/` | free | none |
 | GET | `/health` | free | none |
 | GET | `/metrics` | free | none |
+| GET | `/v1/token-risk/demo` | free (5/day) | none |
 | POST | `/v1/scan` | $0.01 | x402 |
 | POST | `/v1/sim` | $0.05 | x402 |
 | POST | `/v1/sim/deep` | $0.25 | x402 |
 | POST | `/v1/scan/project` | $0.10 | x402 |
 | POST | `/v1/address-risk` | $0.005 | x402 |
-| POST | `/v1/token-risk` | $0.05 | x402 |
-| POST | `/v1/bundle` | $0.15 | x402 |
+| POST | `/v1/token-risk` | $0.02 | x402 |
+| POST | `/v1/bundle` | $0.03 | x402 |
 | GET | `/v1/verify` | free | none |
 
 ## Related service: Greenlight
@@ -42,9 +50,11 @@ trace — use it for honeypot/MEV checks where a bare `eth_call` is not enough.
 `/v1/token-risk` is the trading-agent route: check a token before you trade it.
 Give the token contract address and get back a honeypot verdict, transfer tax
 percentage, and owner-privilege findings as a severity-scored `ScanReport`
-($0.05). It is address-first: no Solidity source or contract name needed.
+($0.02). It is address-first: no Solidity source or contract name needed. The
+free demo (`GET /v1/token-risk/demo?address=0x...`, 5/day) returns the FULL
+report so you can inspect the shape before paying.
 
-`/v1/bundle` ($0.15) runs token-risk, address-risk, and an optional source scan
+`/v1/bundle` ($0.03) runs token-risk, address-risk, and an optional source scan
 in one call. Send `{address}` alone, or add `"source"` for a full Solidity
 analysis alongside the address checks.
 
@@ -201,6 +211,9 @@ call moves value, and the full `internal_calls` trace.
 ## curl examples
 
 ```bash
+# Free token-risk demo — FULL report, 5/day, no payment
+curl 'https://preflight--preflight-api-api.us-east.modal.run/v1/token-risk/demo?address=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+
 # Service info + prices
 curl https://preflight--preflight-api-api.us-east.modal.run/
 
@@ -245,8 +258,8 @@ curl 'https://preflight--preflight-api-api.us-east.modal.run/v1/verify?digest=0x
 
 An MCP server exposes paid `preflight_check {source, contract_name?}` ($0.01),
 `preflight_sim {to, data?, value_wei?, mode?}` ($0.05 quick / $0.25 deep),
-`preflight_token_risk {address}` ($0.05), and
-`preflight_bundle {address, source?}` ($0.15), plus free
+`preflight_token_risk {address}` ($0.02), and
+`preflight_bundle {address, source?}` ($0.03), plus free
 `preflight_verify {digest, attestation?}` and `preflight_pricing`. Set
 `mode: "deep"` to use `/v1/sim/deep`. Run it with
 `uv run python -m preflight.mcp.server` (stdio) or `--http` for streamable HTTP.

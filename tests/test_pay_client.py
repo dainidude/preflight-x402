@@ -247,11 +247,11 @@ def test_route_table_prices() -> None:
     assert pay_client.ROUTES["address-risk"].path == "/v1/address-risk"
     assert pay_client.ROUTES["address-risk"].amount_base_units == "5000"
     assert pay_client.ROUTES["token-risk"].path == "/v1/token-risk"
-    assert pay_client.ROUTES["token-risk"].price == "$0.05"
-    assert pay_client.ROUTES["token-risk"].amount_base_units == "50000"
+    assert pay_client.ROUTES["token-risk"].price == "$0.02"
+    assert pay_client.ROUTES["token-risk"].amount_base_units == "20000"
     assert pay_client.ROUTES["bundle"].path == "/v1/bundle"
-    assert pay_client.ROUTES["bundle"].price == "$0.15"
-    assert pay_client.ROUTES["bundle"].amount_base_units == "150000"
+    assert pay_client.ROUTES["bundle"].price == "$0.03"
+    assert pay_client.ROUTES["bundle"].amount_base_units == "30000"
 
 
 def test_erc20_transfer_calldata_encoding() -> None:

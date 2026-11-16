@@ -25,11 +25,11 @@ STATIC_DISCOVERY_PATH = (
     Path(__file__).resolve().parents[3] / "public" / ".well-known" / "x402.json"
 )
 
-# Token-risk is being wired by the arbiter in this wave. Keep discovery complete
-# even if ROUTE_PRICES has not landed yet; ROUTE_PRICES wins when present.
+# Token-risk fallback for discovery completeness; ROUTE_PRICES wins when
+# present (this only fires if ROUTE_PRICES ever drops the route).
 _TOKEN_RISK_ROUTE = "POST /v1/token-risk"
 _TOKEN_RISK_FALLBACK = (
-    "$0.05",
+    "$0.02",
     "Token risk: honeypot transfer probe, transfer tax, and owner privileges",
 )
 

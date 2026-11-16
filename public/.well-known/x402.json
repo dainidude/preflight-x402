@@ -853,7 +853,7 @@
             "input": {
               "type": "mcp",
               "toolName": "preflight_token_risk",
-              "description": "Check a token before trading: honeypot, transfer tax, owner privileges ($0.05).",
+              "description": "Check a token before trading: honeypot, transfer tax, owner privileges ($0.02).",
               "transport": "streamable-http",
               "inputSchema": {
                 "properties": {
@@ -919,7 +919,7 @@
             "input": {
               "type": "mcp",
               "toolName": "preflight_bundle",
-              "description": "Combined token-risk + address-risk + optional source scan ($0.15).",
+              "description": "Combined token-risk + address-risk + optional source scan ($0.03).",
               "transport": "streamable-http",
               "inputSchema": {
                 "properties": {

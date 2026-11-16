@@ -443,6 +443,52 @@ usage = UsageTracker()
 
 
 # ---------------------------------------------------------------------------
+# UA classification — agents get auto-trial; crawlers MUST keep seeing the 402.
+# Bare HTTP clients (httpx/curl/wget/go-http-client) are "unknown" so the Bazaar's
+# own probers, x402scan, uptime monitors, and MCP registries never accidentally
+# get a free pass. Only recognised agent SDKs (OpenAI/Claude/Gemini/etc.) auto-trial.
+# ---------------------------------------------------------------------------
+_CRAWLER_TOKENS = (
+    "bot", "spider", "crawler", "index", "monitor", "uptime",
+    "pingdom", "betteruptime", "headlesschrome",
+)
+_AGENT_TOKENS = (
+    "openai", "codex", "claude", "anthropic", "gemini",
+    "langchain", "autogen", "crewai", "agentic", "x402-client",
+)
+_BROWSER_TOKENS = ("chrome/", "firefox/", "safari/", "edg/")
+# Bare HTTP clients — NOT auto-trialed (Bazaar probers use these)
+_UNKNOWN_CLIENT_TOKENS = ("python-httpx", "curl/", "wget", "go-http-client")
+
+
+def classify_user_agent(ua: str) -> str:
+    """Classify a User-Agent string into agent / crawler / browser / unknown.
+
+    Rules (case-insensitive):
+    - crawler: contains any of bot/spider/crawler/index/monitor/uptime/
+      pingdom/betteruptime/headlesschrome
+    - agent:   contains any of openai/codex/claude/anthropic/gemini/
+      langchain/autogen/crewai/agentic/x402-client
+    - browser: starts with Mozilla/ AND contains Chrome/Firefox/Safari/Edg
+      (and not crawler tokens above)
+    - else "unknown" — bare HTTP clients (python-httpx, curl/, wget,
+      go-http-client) land here so Bazaar probers keep seeing the raw 402.
+    """
+    if not ua:
+        return "unknown"
+    low = ua.lower()
+    for tok in _CRAWLER_TOKENS:
+        if tok in low:
+            return "crawler"
+    for tok in _AGENT_TOKENS:
+        if tok in low:
+            return "agent"
+    if low.startswith("mozilla/") and any(t in low for t in _BROWSER_TOKENS):
+        return "browser"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
 
@@ -528,12 +574,27 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
         return response
 
 
+    # UA classification — recorded for every 402 so we can see the funnel split.
+    ua = request.headers.get("user-agent", "")
+    ua_class = classify_user_agent(ua)
+
     # Free tier is OPT-IN via explicit header so that x402 crawlers/validators
     # (which never send it) always see the required 402 payment challenge.
     # Trial quota keys on IP/UA identity ONLY (x-payer is not trusted here).
     free_trial = request.headers.get("x-preflight-free") == "trial"
     trial_ident = usage.ip_identity(request)
-    if cfg.free_tier and free_trial and usage.consume_free(trial_ident):
+
+    # Auto-trial for recognised agent SDKs (OpenAI/Claude/Gemini/etc.) — they
+    # get the free trial WITHOUT the header. Crawlers/browsers/unknown NEVER
+    # get auto-trialed; they MUST see the raw 402 (HARD INVARIANT 1).
+    agent_auto_trial = (
+        cfg.free_tier
+        and ua_class == "agent"
+        and not free_trial
+        and usage.free_left(trial_ident) > 0
+    )
+
+    if cfg.free_tier and (free_trial or agent_auto_trial) and usage.consume_free(trial_ident):
         if not usage.allow_rate(ident):
             from fastapi.responses import JSONResponse
 
@@ -549,6 +610,7 @@ async def x402_payment_middleware(request: Request, call_next: Callable) -> Resp
 
     if not signature:
         collector.record_402(route)
+        collector.record_ua_402(ua_class)
         return _payment_required_response(route, requirements, request)
 
     try:
