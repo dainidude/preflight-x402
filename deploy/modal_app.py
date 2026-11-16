@@ -221,6 +221,25 @@ def daily_digest() -> None:
     except Exception as exc:
         text += f"\n\n📈 Trending scan skipped: {exc}"
 
+    # Browser posting lives on the user's machine (the Modal X-API path has
+    # no credits; the browser profile is local-only) — remind them when
+    # there is something worth posting.
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+
+        _vf = _Path("/data/state/verdicts.json")
+        if _vf.exists():
+            _vs = _json.loads(_vf.read_text())
+            _spicy = [v for v in _vs if v.get("verdict") in ("block", "review")]
+            if _spicy:
+                text += (
+                    f"\n\n📣 {len(_spicy)} block/review verdict(s) ready — "
+                    "post them: `uv run python scripts/x_post_browser.py verdicts`"
+                )
+    except Exception:
+        pass
+
     try:
         httpx.post(webhook, json={"content": f"```\n{text}\n```"}, timeout=15.0)
     except Exception as exc:
