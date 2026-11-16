@@ -476,7 +476,7 @@ async def test_token_risk_402_names_price_and_route(
 
     with pytest.raises(mcp_server.ToolError) as excinfo:
         await mcp_server.token_risk("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
-    assert "$0.05" in str(excinfo.value)
+    assert "$0.02" in str(excinfo.value)
     assert "--route token-risk" in str(excinfo.value)
 
 
@@ -529,7 +529,7 @@ async def test_bundle_402_names_price_and_route(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(mcp_server.ToolError) as excinfo:
         await mcp_server.bundle_analysis("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
-    assert "$0.15" in str(excinfo.value)
+    assert "$0.03" in str(excinfo.value)
     assert "--route bundle" in str(excinfo.value)
 
 
@@ -603,10 +603,10 @@ def test_x402_discovery_real_values() -> None:
     assert doc["pricing"]["POST /v1/scan/project"]["amount"] == "100000"
     assert doc["pricing"]["POST /v1/address-risk"]["price"] == "$0.005"
     assert doc["pricing"]["POST /v1/address-risk"]["amount"] == "5000"
-    assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.05"
-    assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
-    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.15"
-    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "150000"
+    assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.02"
+    assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "20000"
+    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.03"
+    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "30000"
     for route in doc["pricing"].values():
         assert route["network"] == "eip155:8453"
         assert route["asset"] == payment["asset"]

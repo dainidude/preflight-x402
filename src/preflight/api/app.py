@@ -18,7 +18,12 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from preflight.api.cache import LRUCache
 from preflight.api.metrics import router as metrics_router
-from preflight.api.payments import price_list, validate_pay_to_address, x402_payment_middleware
+from preflight.api.payments import (
+    ROUTE_PRICES,
+    price_list,
+    validate_pay_to_address,
+    x402_payment_middleware,
+)
 from preflight.attestation import sign_report
 from preflight.config import REPO_ROOT, config
 from preflight.types import (
@@ -356,7 +361,7 @@ async def sim_transaction(request: SimRequest, raw: Request) -> Response:
 
 @app.post("/v1/token-risk")
 async def token_risk(request: TokenRiskRequest, raw: Request) -> Response:
-    """Token risk by address — honeypot, tax, owner privileges. $0.05 via x402."""
+    """Token risk by address — honeypot, tax, owner privileges. $0.02 via x402."""
     try:
         report: ScanReport = await _call_core(_get_token_risk(), request.address)
     except ValueError as exc:
@@ -370,11 +375,52 @@ async def token_risk(request: TokenRiskRequest, raw: Request) -> Response:
     )
 
 
+@app.get("/v1/token-risk/demo")
+async def token_risk_demo(raw: Request, address: str = "") -> Response:
+    """FREE (5/day per identity): the FULL token-risk report, no payment.
+
+    The conversion showcase — an agent sees exactly what a paid call returns
+    before ever paying (Greenlight's pair-check demo pattern, its proven
+    surface). NOT in ROUTE_PRICES, so the x402 middleware passes it through.
+    """
+    from preflight.api.metrics import collector
+    from preflight.api.payments import usage
+
+    if not address:
+        return JSONResponse({"error": "address query param required"}, status_code=422)
+    ident = usage.ip_identity(raw)
+    if not usage.consume_demo(ident):
+        return JSONResponse(
+            {
+                "error": "demo quota exhausted (5/day per identity)",
+                "hint": "First 10 calls/day are free: retry with header "
+                "'X-Preflight-Free: trial' on POST /v1/token-risk.",
+            },
+            status_code=429,
+        )
+    try:
+        report: ScanReport = await _call_core(_get_token_risk(), address)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    body = report.model_dump(mode="json")
+    if body.get("attestation") is None:
+        body["attestation"] = sign_report(body)
+    body["demo"] = True
+    body["notes"] = body.get("notes", []) + [
+        "Demo call (free, 5/day): this is the FULL report a paid call returns.",
+        "Paid route: POST /v1/token-risk — $0.02/call; first 10 calls/day free "
+        "with header 'X-Preflight-Free: trial'.",
+    ]
+    collector.record_demo()
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+
 
 
 @app.post("/v1/bundle")
 async def bundle(request: BundleRequest, raw: Request) -> Response:
-    """Bundle: token-risk + address-risk + (optional) source scan. $0.15 via x402."""
+    """Bundle: token-risk + address-risk + (optional) source scan. $0.03 via x402."""
     address = request.address
     notes: list[str] = []
     findings: list[Finding] = []
@@ -656,14 +702,19 @@ if __name__ == "__main__":
 # 402 response, and top-level ownership proofs.
 # ---------------------------------------------------------------------------
 
-_PAID_PATHS: dict[str, str] = {  # path -> USD amount
-    "/v1/scan": "0.01",
-    "/v1/sim": "0.05",
-    "/v1/sim/deep": "0.25",
-    "/v1/scan/project": "0.10",
-    "/v1/address-risk": "0.005",
-    "/v1/token-risk": "0.05",
-    "/v1/bundle": "0.15",
+_PAID_PATHS: dict[str, str] = {  # path -> USD amount, DERIVED from ROUTE_PRICES
+    # (single source of truth: repricing ROUTE_PRICES flows here automatically —
+    # this literal table drifted $0.05 vs the real $0.02 after the repricing)
+    path: ROUTE_PRICES[f"POST {path}"][0].lstrip("$")
+    for path in (
+        "/v1/scan",
+        "/v1/sim",
+        "/v1/sim/deep",
+        "/v1/scan/project",
+        "/v1/address-risk",
+        "/v1/token-risk",
+        "/v1/bundle",
+    )
 }
 
 

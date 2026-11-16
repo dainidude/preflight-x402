@@ -27,6 +27,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+
+from preflight.api.payments import ROUTE_PRICES
+
+
+def _price(route: str) -> str:
+    """Route price from the single source of truth (ROUTE_PRICES).
+
+    The literals here drifted once ($0.05 taught to agents after the route
+    repriced to $0.02) — every price string in this file is derived now.
+    """
+    return ROUTE_PRICES[route][0]
 from typing import Any
 from urllib.parse import quote
 
@@ -128,7 +139,7 @@ async def simulate_transaction(
     if mode not in {"quick", "deep"}:
         raise ToolError("mode must be 'quick' or 'deep'")
     path = "/v1/sim/deep" if mode == "deep" else "/v1/sim"
-    price = "$0.25" if mode == "deep" else "$0.05"
+    price = _price(f"POST {path}")
 
     payload: dict[str, Any] = {"to": to}
     if data is not None:
@@ -175,7 +186,8 @@ async def token_risk(address: str) -> dict[str, Any]:
 
     if response.status_code == 402:
         raise ToolError(
-            "Payment required (402) for POST /v1/token-risk ($0.05 USDC on Base "
+            "Payment required (402) for POST /v1/token-risk "
+            f"({_price('POST /v1/token-risk')} USDC on Base "
             "mainnet). Run the API with DEV_MODE=1 for local use, or run the paying "
             "demo client: `uv run python client/pay_client.py --route token-risk "
             "--address 0x...`."
@@ -212,7 +224,8 @@ async def bundle_analysis(address: str, source: str | None = None) -> dict[str, 
 
     if response.status_code == 402:
         raise ToolError(
-            "Payment required (402) for POST /v1/bundle ($0.15 USDC on Base "
+            "Payment required (402) for POST /v1/bundle "
+            f"({_price('POST /v1/bundle')} USDC on Base "
             "mainnet). Run the API with DEV_MODE=1 for local use, or run the paying "
             "demo client: `uv run python client/pay_client.py --route bundle "
             "--address 0x...`."
@@ -272,7 +285,7 @@ def create_server() -> MCPServer:
         name="preflight_check",
         description=(
             "Scan Solidity source and return a security verdict. This is a paid "
-            "call ($0.01 USDC on Base mainnet) that flows through x402; in dev "
+            f"call ({_price('POST /v1/scan')} USDC on Base mainnet) that flows through x402; in dev "
             "mode (DEV_MODE=1) no payment is required."
         ),
     )
@@ -285,7 +298,8 @@ def create_server() -> MCPServer:
         description=(
             "Simulate a transaction against a contract and return revert reason, "
             "gas used, balance deltas, and severity-scored findings. "
-            "mode='quick' costs $0.05 (eth_call); mode='deep' costs $0.25 "
+            f"mode='quick' costs {_price('POST /v1/sim')} (eth_call); "
+            f"mode='deep' costs {_price('POST /v1/sim/deep')} "
             "(anvil local fork with gas, balance_delta_wei, and internal_calls). "
             "Paid in USDC on Base mainnet via x402; DEV_MODE=1 skips payment."
         ),
@@ -304,7 +318,8 @@ def create_server() -> MCPServer:
         description=(
             "Check a token contract before trading it. Returns a honeypot "
             "transfer verdict, transfer tax percentage, and owner privileges as "
-            "a severity-scored ScanReport. Paid call ($0.05 USDC on Base mainnet) "
+            "a severity-scored ScanReport. Paid call "
+            f"({_price('POST /v1/token-risk')} USDC on Base mainnet) "
             "via x402; DEV_MODE=1 skips payment."
         ),
     )
@@ -316,7 +331,8 @@ def create_server() -> MCPServer:
         name="preflight_bundle",
         description=(
             "Run a combined token-risk, address-risk, and optional source scan "
-            "for one address in a single paid call ($0.15 USDC on Base mainnet). "
+            "for one address in a single paid call "
+            f"({_price('POST /v1/bundle')} USDC on Base mainnet). "
             "Returns the bundle JSON."
         ),
     )
@@ -465,8 +481,19 @@ def _root_info() -> dict:
         ],
         "api_origin": "https://preflight--preflight-api-api.us-east.modal.run",
         "pricing": (
-            "scan $0.01 · sim $0.05 · deep sim $0.25 · token-risk $0.05 · "
-            "bundle $0.15 · project $0.10 · address-risk $0.005 · verify free "
+            " · ".join(
+                f"{label} {ROUTE_PRICES[route][0]}"
+                for label, route in (
+                    ("scan", "POST /v1/scan"),
+                    ("sim", "POST /v1/sim"),
+                    ("deep sim", "POST /v1/sim/deep"),
+                    ("token-risk", "POST /v1/token-risk"),
+                    ("bundle", "POST /v1/bundle"),
+                    ("project", "POST /v1/scan/project"),
+                    ("address-risk", "POST /v1/address-risk"),
+                )
+            )
+            + " · verify free "
             "(USDC on Base via x402; first 10 calls/day free with "
             "X-Preflight-Free: trial)"
         ),
@@ -492,15 +519,22 @@ def _server_card() -> dict:
         "tools": [
             {
                 "name": "preflight_check",
-                "description": "Scan Solidity source and return a severity-scored, EIP-712-attested verdict ($0.01, 10 free/day).",
+                "description": f"Scan Solidity source and return a severity-scored, EIP-712-attested verdict ({_price('POST /v1/scan')}, 10 free/day).",
             },
             {
                 "name": "preflight_sim",
-                "description": "Simulate a transaction: revert decoding (quick, $0.05) or anvil-fork gas/balance/traces (deep, $0.25).",
+                "description": (
+                    "Simulate a transaction: revert decoding "
+                    f"(quick, {_price('POST /v1/sim')}) or anvil-fork "
+                    f"gas/balance/traces (deep, {_price('POST /v1/sim/deep')})."
+                ),
             },
             {
                 "name": "preflight_token_risk",
-                "description": "Token risk by address: honeypot verdict, transfer tax %, owner privileges ($0.05).",
+                "description": (
+                    "Token risk by address: honeypot verdict, transfer tax %, "
+                    f"owner privileges ({_price('POST /v1/token-risk')})."
+                ),
             },
             {
                 "name": "preflight_pricing",

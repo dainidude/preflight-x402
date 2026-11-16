@@ -68,11 +68,17 @@ ROUTE_PRICES: dict[str, tuple[str, str]] = {
     "POST /v1/sim/deep": ("$0.25", "Deep transaction simulation (anvil fork: gas, balance deltas, traces)"),
     "POST /v1/scan/project": ("$0.10", "Multi-file project security scan"),
     "POST /v1/address-risk": ("$0.005", "Address risk heuristics"),
-    "POST /v1/token-risk": ("$0.05", "Token risk by address: honeypot verdict, transfer tax, owner privileges"),
-    "POST /v1/bundle": ("$0.15", "Bundle: token-risk + address-risk + (optional) source scan in one call"),
+    # $0.02: matches ax1.vc (17k calls/30d) — the proven price point for
+    # token verdicts. $0.05 was 2.5x the category leader with zero sales.
+    "POST /v1/token-risk": ("$0.02", "Token risk by address: honeypot verdict, transfer tax, owner privileges"),
+    # $0.03: token-risk $0.02 + address-risk $0.005 (+ optional $0.01 scan)
+    # — the old $0.15 was a 6x premium over $0.025 of content after the
+    # token-risk cut; nobody would pay it.
+    "POST /v1/bundle": ("$0.03", "Bundle: token-risk + address-risk + (optional) source scan in one call"),
 }
 
 FREE_TIER_DAILY = 10
+DEMO_DAILY = 5  # free full-shape demo calls/day per identity (conversion showcase)
 RATE_LIMIT_PER_MIN = 10
 PAID_DAILY_CAP_USD = 10  # AGENTS.md contract: $10/day per-payer approximation
 
@@ -299,6 +305,7 @@ class UsageTracker:
 
     def __init__(self) -> None:
         self._free_day: dict[str, tuple[str, int]] = {}
+        self._demo_day: dict[str, tuple[str, int]] = {}
         self._paid_day: dict[str, tuple[str, float]] = {}
         self._window: dict[str, deque[float]] = defaultdict(deque)
         self._last_flush = 0.0
@@ -320,6 +327,7 @@ class UsageTracker:
         try:
             data = json.loads(self._usage_file.read_text())
             self._free_day = {k: tuple(v) for k, v in data.get("free", {}).items()}
+            self._demo_day = {k: tuple(v) for k, v in data.get("demo", {}).items()}
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -335,7 +343,12 @@ class UsageTracker:
         try:
             tmp = self._usage_file.with_suffix(".tmp")
             tmp.write_text(
-                json.dumps({"free": {k: list(v) for k, v in self._free_day.items()}})
+                json.dumps(
+                    {
+                        "free": {k: list(v) for k, v in self._free_day.items()},
+                        "demo": {k: list(v) for k, v in self._demo_day.items()},
+                    }
+                )
             )
             tmp.replace(self._usage_file)
         except OSError:
@@ -377,6 +390,25 @@ class UsageTracker:
         if used >= FREE_TIER_DAILY:
             return False
         self._free_day[ident] = (today, used + 1)
+        self._maybe_flush()
+        return True
+
+    def demo_left(self, ident: str) -> int:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day, used = self._demo_day.get(ident, (today, 0))
+        if day != today:
+            return DEMO_DAILY
+        return max(0, DEMO_DAILY - used)
+
+    def consume_demo(self, ident: str) -> bool:
+        """Consume one of the 5/day free full-shape demo calls for ident."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day, used = self._demo_day.get(ident, (today, 0))
+        if day != today:
+            used = 0
+        if used >= DEMO_DAILY:
+            return False
+        self._demo_day[ident] = (today, used + 1)
         self._maybe_flush()
         return True
 
@@ -447,6 +479,7 @@ def _payment_required_response(
     body = dict(body)
     body["hint"] = (
         "First 10 calls/day are free: retry with header 'X-Preflight-Free: trial'. "
+        "Preview the full report free: GET /v1/token-risk/demo?address=<0x...> (5/day). "
         "Payment: USDC on Base via x402 — retry with the PAYMENT-SIGNATURE header."
     )
     return JSONResponse(

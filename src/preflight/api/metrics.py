@@ -33,6 +33,7 @@ class MetricsCollector:
         self._free_tier_grants: Dict[str, int] = {}
         self._rate_limited_total = 0
         self._payment_required_total: Dict[str, int] = {}
+        self._demo_calls_total = 0
         self._first_settle_at: str | None = None
         self._last_settle_at: str | None = None
         self._auth_errors_total = 0
@@ -67,6 +68,7 @@ class MetricsCollector:
             self._free_tier_grants = dict(data.get("free_tier_grants", {}))
             self._rate_limited_total = data.get("rate_limited_total", 0)
             self._payment_required_total = dict(data.get("payment_required_total", {}))
+            self._demo_calls_total = data.get("demo_calls_total", 0)
             self._first_settle_at = data.get("first_settle_at")
             self._last_settle_at = data.get("last_settle_at")
             self._auth_errors_total = data.get("auth_errors_total", 0)
@@ -98,6 +100,7 @@ class MetricsCollector:
                     "free_tier_grants": self._free_tier_grants,
                     "rate_limited_total": self._rate_limited_total,
                     "payment_required_total": self._payment_required_total,
+                    "demo_calls_total": self._demo_calls_total,
                     "first_settle_at": self._first_settle_at,
                     "last_settle_at": self._last_settle_at,
                     "auth_errors_total": self._auth_errors_total,
@@ -211,6 +214,12 @@ class MetricsCollector:
             self._payment_required_total[route] = self._payment_required_total.get(route, 0) + 1
         self._maybe_flush()
 
+    def record_demo(self) -> None:
+        """Record a free full-shape demo call (conversion showcase funnel)."""
+        with self._lock:
+            self._demo_calls_total += 1
+        self._maybe_flush()
+
     def snapshot(self) -> Dict[str, Any]:
         """Get current metrics snapshot.
         
@@ -249,6 +258,7 @@ class MetricsCollector:
                 "free_tier_grants": self._free_tier_grants.copy(),
                 "rate_limited_total": self._rate_limited_total,
                 "payment_required_total": self._payment_required_total.copy(),
+                "demo_calls_total": self._demo_calls_total,
             }
 
 # Module-level singleton

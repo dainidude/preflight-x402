@@ -53,10 +53,10 @@ def test_build_derives_payment_and_every_route_price() -> None:
         assert entry["asset"] == doc["payment"]["asset"]
         assert entry["scheme"] == "exact"
 
-    assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.05"
-    assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
-    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.15"
-    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "150000"
+    assert doc["pricing"]["POST /v1/token-risk"]["price"] == "$0.02"
+    assert doc["pricing"]["POST /v1/token-risk"]["amount"] == "20000"
+    assert doc["pricing"]["POST /v1/bundle"]["price"] == "$0.03"
+    assert doc["pricing"]["POST /v1/bundle"]["amount"] == "30000"
     assert doc["endpoints"]["GET /v1/verify"] == "attestation verification (free)"
     assert "preflight_bundle" in doc["mcp"]["tools"]
     assert "preflight_verify" in doc["mcp"]["tools"]
@@ -88,8 +88,8 @@ def test_router_serves_generated_json(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["payment"]["pay_to"] == cfg.pay_to_address
-    assert data["pricing"]["POST /v1/token-risk"]["amount"] == "50000"
-    assert data["pricing"]["POST /v1/bundle"]["amount"] == "150000"
+    assert data["pricing"]["POST /v1/token-risk"]["amount"] == "20000"
+    assert data["pricing"]["POST /v1/bundle"]["amount"] == "30000"
     assert data["pricing"]["POST /v1/scan"]["amount"] == "10000"
 
 
